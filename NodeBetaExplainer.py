@@ -27,7 +27,7 @@ class BetaExplainer:
             self.target = self.model(self.X, self.G).flatten()
 
         self.ne = G.shape[1]
-        self.N = max(X.shape[1], X.shape[0], G.shape[1])
+        self.N = max(X.shape[0], self.ne)
         self.obs = 1000
         self.device = device
         self.a = a
@@ -46,7 +46,11 @@ class BetaExplainer:
 
     def guide(self, ys):
         alpha = pyro.param("alpha_q", self.a * torch.ones(self.N).to(self.device), constraint=constraints.positive)
+        while alpha.shape[1] < self.N:
+            alpha = pyro.param("alpha_q", self.a * torch.ones(self.N).to(self.device), constraint=constraints.positive)
         beta = pyro.param("beta_q", self.b * torch.ones(self.N).to(self.device), constraint=constraints.positive)
+        while beta.shape[1] < self.N:
+            beta = pyro.param("beta_q", self.a * torch.ones(self.N).to(self.device), constraint=constraints.positive)
         alpha_edges = alpha[self.G[0, :]]
         beta_edges = beta[self.G[1, :]]
         m = pyro.sample("mask", dist.Beta(alpha_edges, beta_edges).to_event(1))
