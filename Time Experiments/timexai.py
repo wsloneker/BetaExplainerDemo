@@ -10,7 +10,7 @@ from torch_geometric.utils import k_hop_subgraph, to_undirected
 from torch_geometric.data import Data
 import matplotlib
 import numpy as np
-import networkx as nx
+import networkx as snx
 import tqdm
 import torch_geometric.utils as pyg_utils
 import itertools
@@ -60,6 +60,10 @@ import matplotlib
 import tqdm
 import itertools
 import time
+from torch_geometric.nn import GINConv
+import optuna
+
+
 def get_flag():
     pass
 
@@ -170,18 +174,6 @@ def optimize_homophily(
 
     return xcopy
 
-class GCN(torch.nn.Module):
-    def __init__(self, hidden_channels, input_feat, classes):
-        super(GCN, self).__init__()
-        self.conv1 = GCNConv(input_feat, hidden_channels)
-        self.conv2 = GCNConv(hidden_channels, classes)
-
-    def forward(self, x, edge_index):
-        x = self.conv1(x, edge_index)
-        x = x.relu()
-        x = F.dropout(x, p=0.5, training=self.training)
-        x = self.conv2(x, edge_index)
-        return x
 
 def evaluate(out, labels):
     """
@@ -489,132 +481,852 @@ class _BaseExplainer:
 
 EPS = 1e-15
 
-class GNNExplainer(_BaseExplainer):
+import torch
+from torch import Tensor
+from functools import partial
+import torch.nn.functional as F
+from typing import Callable, Optional, Tuple
+from torch_geometric.utils import k_hop_subgraph
+from torch_geometric.utils.num_nodes import maybe_num_nodes
+from torch_geometric.nn import MessagePassing
+from torch_geometric.data import Data
+
+
+import math
+import copy
+import torch
+import networkx as nx
+from functools import partial
+from collections import Counter
+from torch_geometric.data import Batch, Data
+from torch_geometric.utils import to_networkx
+from typing import Callable
+from torch_geometric.utils.num_nodes import maybe_num_nodes
+import copy
+import torch
+import numpy as np
+from typing import Callable, Union
+from scipy.special import comb
+from itertools import combinations
+import torch.nn.functional as F
+from torch_geometric.utils import to_networkx
+from torch_geometric.data import Data, Batch, Dataset, DataLoader
+
+'''
+Code adapted from Dive into Graphs (DIG)
+Code: https://github.com/divelab/DIG
+'''
+
+empty_tuple = tuple()
+
+class MarginalSubgraphDataset(Dataset):
+    """ Collect pair-wise graph data to calculate marginal contribution. """
+    def __init__(self, data, exclude_mask, include_mask, subgraph_build_func):
+        self.num_nodes = data.num_nodes
+        self.X = data.x
+        self.edge_index = data.edge_index
+        self.device = self.X.device
+
+        self.label = data.y
+        self.exclude_mask = torch.tensor(exclude_mask).type(torch.float32).to(self.device)
+        self.include_mask = torch.tensor(include_mask).type(torch.float32).to(self.device)
+        self.subgraph_build_func = subgraph_build_func
+
+    def __len__(self):
+        return self.exclude_mask.shape[0]
+
+    def __getitem__(self, idx):
+        exclude_graph_X, exclude_graph_edge_index = self.subgraph_build_func(self.X, self.edge_index, self.exclude_mask[idx])
+        include_graph_X, include_graph_edge_index = self.subgraph_build_func(self.X, self.edge_index, self.include_mask[idx])
+        exclude_data = Data(x=exclude_graph_X, edge_index=exclude_graph_edge_index)
+        include_data = Data(x=include_graph_X, edge_index=include_graph_edge_index)
+        return exclude_data, include_data
+    def len(self):
+        return self.exclude_mask.shape[0]
+    
+    def get(self, idx):
+        exclude_graph_X, exclude_graph_edge_index = self.subgraph_build_func(self.X, self.edge_index, self.exclude_mask[idx])
+        include_graph_X, include_graph_edge_index = self.subgraph_build_func(self.X, self.edge_index, self.include_mask[idx])
+        exclude_data = Data(x=exclude_graph_X, edge_index=exclude_graph_edge_index)
+        include_data = Data(x=include_graph_X, edge_index=include_graph_edge_index)
+        return exclude_data, include_data
+
+def GnnNets_GC2value_func(gnnNets, target_class, forward_kwargs = {}):
+    def value_func(batch):
+        with torch.no_grad():
+            #logits = gnnNets(data=batch)
+            logits = gnnNets(batch.x, batch.edge_index, **forward_kwargs)
+            print(forward_kwargs)
+            print(batch.batch)
+            probs = F.softmax(logits, dim=-1)
+            print(probs, probs.shape)
+            score = probs[:, target_class]
+        return score
+    return value_func
+
+
+def GnnNets_NC2value_func(gnnNets_NC, node_idx: Union[int, torch.Tensor], target_class: torch.Tensor):
+    def value_func(data):
+        with torch.no_grad():
+            #logits = gnnNets_NC(data=data)
+            logits = gnnNets_NC(data.x, data.edge_index)
+            probs = F.softmax(logits, dim=-1)
+            # select the corresponding node prob through the node idx on all the sampling graphs
+            batch_size = data.batch.max() + 1
+            print(batch_size)
+            probs = probs.reshape(batch_size, -1, probs.shape[-1])
+            score = probs[:, node_idx, target_class]
+            return score
+    return value_func
+
+
+def get_graph_build_func(build_method):
+    if build_method.lower() == 'zero_filling':
+        return graph_build_zero_filling
+    elif build_method.lower() == 'split':
+        return graph_build_split
+    else:
+        raise NotImplementedError
+
+
+def marginal_contribution(data: Data, exclude_mask: np.ndarray, include_mask: np.ndarray,
+                          value_func, subgraph_build_func):
+    """ Calculate the marginal value for each pair. Here exclude_mask and include_mask are node mask. """
+    marginal_subgraph_dataset = MarginalSubgraphDataset(data, exclude_mask, include_mask, subgraph_build_func)
+    dataloader = DataLoader(marginal_subgraph_dataset, batch_size=256, shuffle=False, pin_memory=False, num_workers=0)
+
+    marginal_contribution_list = []
+
+    for exclude_data, include_data in dataloader:
+        exclude_values = value_func(exclude_data)
+        include_values = value_func(include_data)
+        margin_values = include_values - exclude_values
+        marginal_contribution_list.append(margin_values)
+
+    marginal_contributions = torch.cat(marginal_contribution_list, dim=0)
+    return marginal_contributions
+
+
+def graph_build_zero_filling(X, edge_index, node_mask: torch.Tensor):
+    """ subgraph building through masking the unselected nodes with zero features """
+    ret_X = X * node_mask.unsqueeze(1)
+    return ret_X, edge_index
+
+
+def graph_build_split(X, edge_index, node_mask: torch.Tensor):
+    """ subgraph building through spliting the selected nodes from the original graph """
+    row, col = edge_index
+    edge_mask = (node_mask[row] == 1) & (node_mask[col] == 1)
+    ret_edge_index = edge_index[:, edge_mask]
+    return X, ret_edge_index
+
+
+def l_shapley(coalition: list, data: Data, local_raduis: int,
+              value_func: Callable, subgraph_building_method='zero_filling'):
+    """ shapley value where players are local neighbor nodes """
+    graph = to_networkx(data)
+    num_nodes = graph.number_of_nodes()
+    subgraph_build_func = get_graph_build_func(subgraph_building_method)
+
+    local_region = copy.copy(coalition)
+    for k in range(local_raduis - 1):
+        k_neiborhoood = []
+        for node in local_region:
+            k_neiborhoood += list(graph.neighbors(node))
+        local_region += k_neiborhoood
+        local_region = list(set(local_region))
+
+    set_exclude_masks = []
+    set_include_masks = []
+    nodes_around = [node for node in local_region if node not in coalition]
+    num_nodes_around = len(nodes_around)
+
+    for subset_len in range(0, num_nodes_around + 1):
+        node_exclude_subsets = combinations(nodes_around, subset_len)
+        for node_exclude_subset in node_exclude_subsets:
+            set_exclude_mask = np.ones(num_nodes)
+            set_exclude_mask[local_region] = 0.0
+            if node_exclude_subset:
+                set_exclude_mask[list(node_exclude_subset)] = 1.0
+            set_include_mask = set_exclude_mask.copy()
+            set_include_mask[coalition] = 1.0
+
+            set_exclude_masks.append(set_exclude_mask)
+            set_include_masks.append(set_include_mask)
+
+    exclude_mask = np.stack(set_exclude_masks, axis=0)
+    include_mask = np.stack(set_include_masks, axis=0)
+    num_players = len(nodes_around) + 1
+    num_player_in_set = num_players - 1 + len(coalition) - (1 - exclude_mask).sum(axis=1)
+    p = num_players
+    S = num_player_in_set
+    coeffs = torch.tensor(1.0 / comb(p, S) / (p - S + 1e-6))
+
+    marginal_contributions = \
+        marginal_contribution(data, exclude_mask, include_mask, value_func, subgraph_build_func)
+
+    l_shapley_value = (marginal_contributions.squeeze().cpu() * coeffs).sum().item()
+    return l_shapley_value
+
+
+def mc_shapley(coalition: list, data: Data,
+               value_func: Callable, subgraph_building_method='zero_filling',
+               sample_num=1000) -> float:
+    """ monte carlo sampling approximation of the shapley value """
+    subset_build_func = get_graph_build_func(subgraph_building_method)
+
+    num_nodes = data.num_nodes
+    node_indices = np.arange(num_nodes)
+    coalition_placeholder = num_nodes
+    set_exclude_masks = []
+    set_include_masks = []
+
+    for example_idx in range(sample_num):
+        subset_nodes_from = [node for node in node_indices if node not in coalition]
+        random_nodes_permutation = np.array(subset_nodes_from + [coalition_placeholder])
+        random_nodes_permutation = np.random.permutation(random_nodes_permutation)
+        split_idx = np.where(random_nodes_permutation == coalition_placeholder)[0][0]
+        selected_nodes = random_nodes_permutation[:split_idx]
+        set_exclude_mask = np.zeros(num_nodes)
+        set_exclude_mask[selected_nodes] = 1.0
+        set_include_mask = set_exclude_mask.copy()
+        set_include_mask[coalition] = 1.0
+
+        set_exclude_masks.append(set_exclude_mask)
+        set_include_masks.append(set_include_mask)
+
+    exclude_mask = np.stack(set_exclude_masks, axis=0)
+    include_mask = np.stack(set_include_masks, axis=0)
+    marginal_contributions = marginal_contribution(data, exclude_mask, include_mask, value_func, subset_build_func)
+    mc_shapley_value = marginal_contributions.mean().item()
+
+    return mc_shapley_value
+
+
+def mc_l_shapley(coalition: list, data: Data, local_raduis: int,
+                 value_func: Callable, subgraph_building_method='zero_filling',
+                 sample_num=1000) -> float:
+    """ monte carlo sampling approximation of the l_shapley value """
+    graph = to_networkx(data)
+    num_nodes = graph.number_of_nodes()
+    subgraph_build_func = get_graph_build_func(subgraph_building_method)
+
+    local_region = copy.copy(coalition)
+    for k in range(local_raduis - 1):
+        k_neiborhoood = []
+        for node in local_region:
+            k_neiborhoood += list(graph.neighbors(node))
+        local_region += k_neiborhoood
+        local_region = list(set(local_region))
+
+    coalition_placeholder = num_nodes
+    set_exclude_masks = []
+    set_include_masks = []
+    for example_idx in range(sample_num):
+        subset_nodes_from = [node for node in local_region if node not in coalition]
+        random_nodes_permutation = np.array(subset_nodes_from + [coalition_placeholder])
+        random_nodes_permutation = np.random.permutation(random_nodes_permutation)
+        split_idx = np.where(random_nodes_permutation == coalition_placeholder)[0][0]
+        selected_nodes = random_nodes_permutation[:split_idx]
+        set_exclude_mask = np.ones(num_nodes)
+        set_exclude_mask[local_region] = 0.0
+        set_exclude_mask[selected_nodes] = 1.0
+        set_include_mask = set_exclude_mask.copy()
+        set_include_mask[coalition] = 1.0
+
+        set_exclude_masks.append(set_exclude_mask)
+        set_include_masks.append(set_include_mask)
+
+    exclude_mask = np.stack(set_exclude_masks, axis=0)
+    include_mask = np.stack(set_include_masks, axis=0)
+    marginal_contributions = \
+        marginal_contribution(data, exclude_mask, include_mask, value_func, subgraph_build_func)
+
+    mc_l_shapley_value = (marginal_contributions).mean().item()
+    return mc_l_shapley_value
+
+
+def gnn_score(coalition: list, data: Data, value_func: Callable,
+              subgraph_building_method='zero_filling') -> torch.Tensor:
+    """ the value of subgraph with selected nodes """
+    num_nodes = data.num_nodes
+    subgraph_build_func = get_graph_build_func(subgraph_building_method)
+    mask = torch.zeros(num_nodes).type(torch.float32).to(data.x.device)
+    mask[coalition] = 1.0
+    ret_x, ret_edge_index = subgraph_build_func(data.x, data.edge_index, mask)
+    mask_data = Data(x=ret_x, edge_index=ret_edge_index)
+    mask_data = Batch.from_data_list([mask_data])
+    score = value_func(mask_data)
+    # get the score of predicted class for graph or specific node idx
+    return score.item()
+
+
+def NC_mc_l_shapley(coalition: list, data: Data, local_raduis: int,
+                    value_func: Callable, node_idx: int=-1, subgraph_building_method='zero_filling', sample_num=1000) -> float:
+    """ monte carlo approximation of l_shapley where the target node is kept in both subgraph """
+    graph = to_networkx(data)
+    num_nodes = graph.number_of_nodes()
+    subgraph_build_func = get_graph_build_func(subgraph_building_method)
+
+    local_region = copy.copy(coalition)
+    for k in range(local_raduis - 1):
+        k_neiborhoood = []
+        for node in local_region:
+            k_neiborhoood += list(graph.neighbors(node))
+        local_region += k_neiborhoood
+        local_region = list(set(local_region))
+
+    coalition_placeholder = num_nodes
+    set_exclude_masks = []
+    set_include_masks = []
+    for example_idx in range(sample_num):
+        subset_nodes_from = [node for node in local_region if node not in coalition]
+        random_nodes_permutation = np.array(subset_nodes_from + [coalition_placeholder])
+        random_nodes_permutation = np.random.permutation(random_nodes_permutation)
+        split_idx = np.where(random_nodes_permutation == coalition_placeholder)[0][0]
+        selected_nodes = random_nodes_permutation[:split_idx]
+        set_exclude_mask = np.ones(num_nodes)
+        set_exclude_mask[local_region] = 0.0
+        set_exclude_mask[selected_nodes] = 1.0
+        if node_idx != -1:
+            set_exclude_mask[node_idx] = 1.0
+        set_include_mask = set_exclude_mask.copy()
+        set_include_mask[coalition] = 1.0  # include the node_idx
+
+        set_exclude_masks.append(set_exclude_mask)
+        set_include_masks.append(set_include_mask)
+
+    exclude_mask = np.stack(set_exclude_masks, axis=0)
+    include_mask = np.stack(set_include_masks, axis=0)
+    marginal_contributions = \
+        marginal_contribution(data, exclude_mask, include_mask, value_func, subgraph_build_func)
+
+    mc_l_shapley_value = (marginal_contributions).mean().item()
+    return mc_l_shapley_value
+
+'''
+Code adapted from Dive into Graphs (DIG)
+Code: https://github.com/divelab/DIG
+'''
+
+def find_closest_node_result(results, max_nodes):
+    """ return the highest reward tree_node with its subgraph is smaller than max_nodes """
+
+    results = sorted(results, key=lambda x: len(x.coalition))
+
+    result_node = results[0]
+    for result_idx in range(len(results)):
+        x = results[result_idx]
+        if len(x.coalition) <= max_nodes and x.P > result_node.P:
+            result_node = x
+    return result_node
+
+
+def reward_func(reward_method, value_func, node_idx=None,
+                local_radius=4, sample_num=100,
+                subgraph_building_method='zero_filling'):
+    if reward_method.lower() == 'gnn_score':
+        return partial(gnn_score,
+                       value_func=value_func,
+                       subgraph_building_method=subgraph_building_method)
+
+    elif reward_method.lower() == 'mc_shapley':
+        return partial(mc_shapley,
+                       value_func=value_func,
+                       subgraph_building_method=subgraph_building_method,
+                       sample_num=sample_num)
+
+    elif reward_method.lower() == 'l_shapley':
+        return partial(l_shapley,
+                       local_raduis=local_radius,
+                       value_func=value_func,
+                       subgraph_building_method=subgraph_building_method)
+
+    elif reward_method.lower() == 'mc_l_shapley':
+        return partial(mc_l_shapley,
+                       local_raduis=local_radius,
+                       value_func=value_func,
+                       subgraph_building_method=subgraph_building_method,
+                       sample_num=sample_num)
+
+    elif reward_method.lower() == 'nc_mc_l_shapley':
+        assert node_idx is not None, " Wrong node idx input "
+        return partial(NC_mc_l_shapley,
+                       node_idx=node_idx,
+                       local_raduis=local_radius,
+                       value_func=value_func,
+                       subgraph_building_method=subgraph_building_method,
+                       sample_num=sample_num)
+
+    else:
+        raise NotImplementedError
+
+
+def k_hop_subgraph_with_default_whole_graph(
+        edge_index, node_idx=None, num_hops=3, relabel_nodes=False,
+        num_nodes=None, flow='source_to_target'):
+    r"""Computes the :math:`k`-hop subgraph of :obj:`edge_index` around node
+    :attr:`node_idx`.
+    It returns (1) the nodes involved in the subgraph, (2) the filtered
+    :obj:`edge_index` connectivity, (3) the mapping from node indices in
+    :obj:`node_idx` to their new location, and (4) the edge mask indicating
+    which edges were preserved.
+    Args:
+        node_idx (int, list, tuple or :obj:`torch.Tensor`): The central
+            node(s).
+        num_hops: (int): The number of hops :math:`k`.
+        edge_index (LongTensor): The edge indices.
+        relabel_nodes (bool, optional): If set to :obj:`True`, the resulting
+            :obj:`edge_index` will be relabeled to hold consecutive indices
+            starting from zero. (default: :obj:`False`)
+        num_nodes (int, optional): The number of nodes, *i.e.*
+            :obj:`max_val + 1` of :attr:`edge_index`. (default: :obj:`None`)
+        flow (string, optional): The flow direction of :math:`k`-hop
+            aggregation (:obj:`"source_to_target"` or
+            :obj:`"target_to_source"`). (default: :obj:`"source_to_target"`)
+    :rtype: (:class:`LongTensor`, :class:`LongTensor`, :class:`LongTensor`,
+             :class:`BoolTensor`)
     """
-    GNNExplainer: node only
-    """
-    def __init__(self, model: torch.nn.Module, coeff: dict = None):
-        """
-        Args:
-            model (torch.nn.Module): model on which to make predictions
-                The output of the model should be unnormalized class score.
-                For example, last layer = CNConv or Linear.
-            coeff (dict, optional): coefficient of the entropy term and the size term
-                for learning edge mask and node feature mask
-                Default setting:
-                    coeff = {'edge': {'entropy': 1.0, 'size': 0.005},
-                             'feature': {'entropy': 0.1, 'size': 1.0}}
-        """
-        super().__init__(model)
-        if coeff is not None:
-            self.coeff = coeff
+
+    num_nodes = maybe_num_nodes(edge_index, num_nodes)
+
+    assert flow in ['source_to_target', 'target_to_source']
+    if flow == 'target_to_source':
+        row, col = edge_index
+    else:
+        col, row = edge_index  # edge_index 0 to 1, col: source, row: target
+
+    node_mask = row.new_empty(num_nodes, dtype=torch.bool)
+    edge_mask = row.new_empty(row.size(0), dtype=torch.bool)
+
+    inv = None
+
+    if node_idx is None:
+        subsets = torch.tensor([0])
+        cur_subsets = subsets
+        while 1:
+            node_mask.fill_(False)
+            node_mask[subsets] = True
+            torch.index_select(node_mask, 0, row, out=edge_mask)
+            subsets = torch.cat([subsets, col[edge_mask]]).unique()
+            if not cur_subsets.equal(subsets):
+                cur_subsets = subsets
+            else:
+                subset = subsets
+                break
+    else:
+        if isinstance(node_idx, (int, list, tuple)):
+            node_idx = torch.tensor([node_idx], device=row.device, dtype=torch.int64).flatten()
+        elif isinstance(node_idx, torch.Tensor) and len(node_idx.shape) == 0:
+            node_idx = torch.tensor([node_idx], device=row.device)
         else:
-            self.coeff = {'edge': {'entropy': 1.0, 'size': 0.005},
-                          'feature': {'entropy': 0.1, 'size': 1.0}}
+            node_idx = node_idx.to(row.device)
+
+        subsets = [node_idx]
+        for _ in range(num_hops):
+            node_mask.fill_(False)
+            node_mask[subsets[-1]] = True
+            torch.index_select(node_mask, 0, row, out=edge_mask)
+            subsets.append(col[edge_mask])
+        subset, inv = torch.cat(subsets).unique(return_inverse=True)
+        inv = inv[:node_idx.numel()]
+
+    node_mask.fill_(False)
+    node_mask[subset] = True
+    edge_mask = node_mask[row] & node_mask[col]
+
+    edge_index = edge_index[:, edge_mask]
+
+    if relabel_nodes:
+        node_idx = row.new_full((num_nodes,), -1)
+        node_idx[subset] = torch.arange(subset.size(0), device=row.device)
+        edge_index = node_idx[edge_index]
+
+    return subset, edge_index, inv, edge_mask  # subset: key new node idx; value original node idx
+
+
+def compute_scores(score_func, children):
+    results = []
+    for child in children:
+        if child.P == 0:
+            score = score_func(child.coalition, child.data)
+        else:
+            score = child.P
+        results.append(score)
+    return results
+
+class MCTSNode(object):
+
+    def __init__(self, coalition: list, data: Data, ori_graph: nx.Graph,
+                 c_puct: float = 10.0, W: float = 0, N: int = 0, P: float = 0,
+                 mapping = None):
+        self.data = data
+        self.coalition = coalition # Coalition of possible subsets of players
+        self.ori_graph = ori_graph # Original input graph
+        self.c_puct = c_puct # Hyperparameter in search algorithm
+        self.children = [] # Children within MCTS tree
+        self.W = W  # sum of node value
+        self.N = N  # times of arrival
+        self.P = P  # property score (reward)
+
+        self.mapping = mapping # ADDED from OWEN
+
+    def Q(self): # Average of W
+        return self.W / self.N if self.N > 0 else 0
+
+    def U(self, n): # Action selection criteria for MCTS
+        return self.c_puct * self.P * math.sqrt(n) / (1 + self.N)
+
+
+class MCTS(object):
+    r"""
+    Monte Carlo Tree Search Method
+
+    Args:
+        X (:obj:`torch.Tensor`): Input node features
+        edge_index (:obj:`torch.Tensor`): The edge indices.
+        num_hops (:obj:`int`): The number of hops :math:`k`.
+        n_rollout (:obj:`int`): The number of sequence to build the monte carlo tree.
+        min_atoms (:obj:`int`): The number of atoms for the subgraph in the monte carlo tree leaf node.
+        c_puct (:obj:`float`): The hyper-parameter to encourage exploration while searching.
+        expand_atoms (:obj:`int`): The number of children to expand.
+        high2low (:obj:`bool`): Whether to expand children tree node from high degree nodes to low degree nodes.
+        node_idx (:obj:`int`): The target node index to extract the neighborhood.
+        score_func (:obj:`Callable`): The reward function for tree node, such as mc_shapely and mc_l_shapely.
+
+    """
+    def __init__(self, X: torch.Tensor, edge_index: torch.Tensor, num_hops: int,
+                 n_rollout: int = 10, min_atoms: int = 3, c_puct: float = 10.0,
+                 expand_atoms: int = 14, high2low: bool = False,
+                 node_idx: int = None, score_func: Callable = None):
+
+        self.X = X
+        self.edge_index = edge_index
+        self.num_hops = num_hops
+        self.data = Data(x=self.X, edge_index=self.edge_index)
+        self.graph = to_networkx(self.data, to_undirected=True) # NETWORKX VERSION OF GRAPH
+        self.data = Batch.from_data_list([self.data])
+        self.num_nodes = self.graph.number_of_nodes()
+        self.score_func = score_func
+        self.n_rollout = n_rollout
+        self.min_atoms = min_atoms
+        self.c_puct = c_puct
+        self.expand_atoms = expand_atoms
+        self.high2low = high2low
+
+        inv_mapping = None
+
+        # extract the sub-graph and change the node indices.
+        if node_idx is not None:
+            self.ori_node_idx = node_idx
+            self.ori_graph = copy.copy(self.graph)
+            x, edge_index, subset, edge_mask, kwargs = \
+                self.__subgraph__(node_idx, self.X, self.edge_index, self.num_hops)
+            self.data = Batch.from_data_list([Data(x=x, edge_index=edge_index)])
+            self.graph = self.ori_graph.subgraph(subset.tolist())
+            mapping = {int(v): k for k, v in enumerate(subset)}
+            inv_mapping = {v:k for k, v in mapping.items()}
+            self.graph = nx.relabel_nodes(self.graph, mapping)
+            self.node_idx = torch.where(subset == self.ori_node_idx)[0]
+            self.num_nodes = self.graph.number_of_nodes()
+            self.subset = subset
+
+        self.root_coalition = sorted([node for node in range(self.num_nodes)])
+        self.MCTSNodeClass = partial(MCTSNode, data=self.data, ori_graph=self.graph, c_puct=self.c_puct, mapping = inv_mapping)
+        self.root = self.MCTSNodeClass(self.root_coalition) # Root of tree
+        self.state_map = {str(self.root.coalition): self.root}
+
+    def set_score_func(self, score_func):
+        self.score_func = score_func
+
+    @staticmethod
+    def __subgraph__(node_idx, x, edge_index, num_hops, **kwargs):
+        num_nodes, num_edges = x.size(0), edge_index.size(1)
+        subset, edge_index, _, edge_mask = k_hop_subgraph_with_default_whole_graph(
+            edge_index, node_idx, num_hops, relabel_nodes=True, num_nodes=num_nodes)
+
+        x = x[subset]
+        for key, item in kwargs.items():
+            if torch.is_tensor(item) and item.size(0) == num_nodes:
+                item = item[subset]
+            elif torch.is_tensor(item) and item.size(0) == num_edges:
+                item = item[edge_mask]
+            kwargs[key] = item
+
+        return x, edge_index, subset, edge_mask, kwargs
+
+    def mcts_rollout(self, tree_node):
+        cur_graph_coalition = tree_node.coalition
+        if len(cur_graph_coalition) <= self.min_atoms:
+            return tree_node.P
+
+        # Expand if this node has never been visited
+        if len(tree_node.children) == 0:
+            node_degree_list = list(self.graph.subgraph(cur_graph_coalition).degree)
+            node_degree_list = sorted(node_degree_list, key=lambda x: x[1], reverse=self.high2low)
+            all_nodes = [x[0] for x in node_degree_list]
+
+            if len(all_nodes) < self.expand_atoms:
+                expand_nodes = all_nodes
+            else:
+                expand_nodes = all_nodes[:self.expand_atoms]
+
+            for each_node in expand_nodes:
+                # for each node, pruning it and get the remaining sub-graph
+                # here we check the resulting sub-graphs and only keep the largest one
+                subgraph_coalition = [node for node in all_nodes if node != each_node]
+
+                subgraphs = [self.graph.subgraph(c)
+                             for c in nx.connected_components(self.graph.subgraph(subgraph_coalition))]
+                main_sub = subgraphs[0]
+                for sub in subgraphs:
+                    if sub.number_of_nodes() > main_sub.number_of_nodes():
+                        main_sub = sub
+
+                new_graph_coalition = sorted(list(main_sub.nodes()))
+
+                # check the state map and merge the same sub-graph
+                Find_same = False
+                for old_graph_node in self.state_map.values():
+                    if Counter(old_graph_node.coalition) == Counter(new_graph_coalition):
+                        new_node = old_graph_node
+                        Find_same = True
+
+                if Find_same == False:
+                    new_node = self.MCTSNodeClass(new_graph_coalition)
+                    self.state_map[str(new_graph_coalition)] = new_node
+
+                Find_same_child = False
+                for cur_child in tree_node.children:
+                    if Counter(cur_child.coalition) == Counter(new_graph_coalition):
+                        Find_same_child = True
+
+                if Find_same_child == False:
+                    tree_node.children.append(new_node)
+
+            scores = compute_scores(self.score_func, tree_node.children)
+            for child, score in zip(tree_node.children, scores):
+                child.P = score
+
+        sum_count = sum([c.N for c in tree_node.children])
+        selected_node = max(tree_node.children, key=lambda x: x.Q() + x.U(sum_count))
+        v = self.mcts_rollout(selected_node)
+        selected_node.W += v
+        selected_node.N += 1
+        return v
+
+    def mcts(self, verbose=True):
+
+        if verbose:
+            print(f"The nodes in graph is {self.graph.number_of_nodes()}")
+        for rollout_idx in range(self.n_rollout):
+            self.mcts_rollout(self.root)
+            if verbose:
+                print(f"At the {rollout_idx} rollout, {len(self.state_map)} states that have been explored.")
+
+        explanations = [node for _, node in self.state_map.items()]
+        explanations = sorted(explanations, key=lambda x: x.P, reverse=True)
+        # Sorts explanations based on P value (i.e. Score(.,.,.) function in MCTS)
+        return explanations
+
+import numpy as np
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+from typing import Optional
+
+from torch_geometric.nn import MessagePassing
+from torch_geometric.utils import k_hop_subgraph
+
+device = "cuda" if torch.cuda.is_available() else "cpu"
+
+class SubgraphX(_BaseExplainer):
+    r"""
+    Code adapted from Dive into Graphs (DIG)
+    Code: https://github.com/divelab/DIG
+
+    The implementation of paper
+    `On Explainability of Graph Neural Networks via Subgraph Explorations <https://arxiv.org/abs/2102.05152>`_.
+
+    Args:
+        model (:obj:`torch.nn.Module`): The target model prepared to explain
+        num_hops(:obj:`int`, :obj:`None`): The number of hops to extract neighborhood of target node
+          (default: :obj:`None`)
+        rollout(:obj:`int`): Number of iteration to get the prediction
+        min_atoms(:obj:`int`): Number of atoms of the leaf node in search tree
+        c_puct(:obj:`float`): The hyperparameter which encourages the exploration
+        expand_atoms(:obj:`int`): The number of atoms to expand
+          when extend the child nodes in the search tree
+        high2low(:obj:`bool`): Whether to expand children nodes from high degree to low degree when
+          extend the child nodes in the search tree (default: :obj:`False`)
+        local_radius(:obj:`int`): Number of local radius to calculate :obj:`l_shapley`, :obj:`mc_l_shapley`
+        sample_num(:obj:`int`): Sampling time of monte carlo sampling approximation for
+          :obj:`mc_shapley`, :obj:`mc_l_shapley` (default: :obj:`mc_l_shapley`)
+        reward_method(:obj:`str`): The command string to select the
+        subgraph_building_method(:obj:`str`): The command string for different subgraph building method,
+          such as :obj:`zero_filling`, :obj:`split` (default: :obj:`zero_filling`)
+
+    Example:
+        >>> # For graph classification task
+        >>> subgraphx = SubgraphX(model=model, num_classes=2)
+        >>> _, explanation_results, related_preds = subgraphx(x, edge_index)
+
+    """
+    def __init__(self, model, num_hops: Optional[int] = None,
+                 rollout: int = 10, min_atoms: int = 3, c_puct: float = 10.0, expand_atoms=14,
+                 high2low=False, local_radius=4, sample_num=100, reward_method='mc_l_shapley',
+                 subgraph_building_method='zero_filling'):
+
+        super().__init__(model=model, is_subgraphx=True)
+        self.model.eval()
+        self.num_hops = self.update_num_hops(num_hops)
+
+        # mcts hyper-parameters
+        self.rollout = rollout
+        self.min_atoms = min_atoms # N_{min}
+        self.c_puct = c_puct
+        self.expand_atoms = expand_atoms
+        self.high2low = high2low
+
+        # reward function hyper-parameters
+        self.local_radius = local_radius
+        self.sample_num = sample_num
+        self.reward_method = reward_method
+        self.subgraph_building_method = subgraph_building_method
+
+    def update_num_hops(self, num_hops):
+        if num_hops is not None:
+            return num_hops
+
+        k = 0
+        for module in self.model.modules():
+            if isinstance(module, MessagePassing):
+                k += 1
+        return k
+
+    def get_reward_func(self, value_func, node_idx=None, explain_graph = False):
+        if explain_graph:
+            node_idx = None
+        else:
+            assert node_idx is not None
+        return reward_func(reward_method=self.reward_method,
+                           value_func=value_func,
+                           node_idx=node_idx,
+                           local_radius=self.local_radius,
+                           sample_num=self.sample_num,
+                           subgraph_building_method=self.subgraph_building_method)
+
+    def get_mcts_class(self, x, edge_index, node_idx: int = None, score_func: Callable = None, explain_graph = False):
+        if explain_graph:
+            node_idx = None
+        else:
+            assert node_idx is not None
+        return MCTS(x, edge_index,
+                    node_idx=node_idx,
+                    score_func=score_func,
+                    num_hops=self.num_hops,
+                    n_rollout=self.rollout,
+                    min_atoms=self.min_atoms,
+                    c_puct=self.c_puct,
+                    expand_atoms=self.expand_atoms,
+                    high2low=self.high2low)
 
     def get_explanation_node(self, 
+            x: Tensor, 
+            edge_index: Tensor, 
             node_idx: int, 
-            x: torch.Tensor,                 
-            edge_index: torch.Tensor,
-            label: torch.Tensor = None,
-            num_hops: int = None,
-            explain_feature: bool = True,
+            label: int = None, 
             y = None,
-            forward_kwargs: dict = {}):
-        """
-        Explain a node prediction.
-
+            max_nodes: int = 14, 
+            forward_kwargs: dict = {}
+        ) -> Tuple[dict, Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]]:
+        '''
+        Get explanation for a single node within a graph.
         Args:
-            node_idx (int): index of the node to be explained
-            edge_index (torch.Tensor, [2 x m]): edge index of the graph
-            x (torch.Tensor, [n x d]): node features
-            label (torch.Tensor, optional, [n x ...]): labels to explain
-                If not provided, we use the output of the model.
-            num_hops (int, optional): number of hops to consider
-                If not provided, we use the number of graph layers of the GNN.
-            explain_feature (bool): whether to compute the feature mask or not
-                (:default: :obj:`True`)
-            forward_kwargs (dict, optional): additional arguments to model.forward
-                beyond x and edge_index
+            x (torch.Tensor): Input features for every node in the graph.
+            edge_index (torch.Tensor): Edge index for entire input graph.
+            node_idx (int): Node index for which to generate an explanation.
+            label (int, optional): Label for which to assume as a prediction from 
+                the model when generating an explanation. If `None`, this argument 
+                is set to the prediction directly from the model. (default: :obj:`None`)
+            max_nodes (int, optional): Maximum number of nodes to include in the subgraph 
+                generated from the explanation. (default: :obj:`14`)
+            forward_kwargs (dict, optional): Additional arguments to model.forward 
+                beyond x and edge_index. Must be keyed on argument name. 
+                (default: :obj:`{}`)
 
+        :rtype: :class:`Explanation`
         Returns:
             exp (dict):
-                exp['feature_imp'] (torch.Tensor, [d]): feature mask explanation
-                exp['edge_imp'] (torch.Tensor): k-hop edge importance
+                exp['feature_imp'] is `None` because no feature explanations are generated.
+                exp['node_imp'] (torch.Tensor, (n,)): Node mask of size `(n,)` where `n` 
+                    is number of nodes in the entire graph described by `edge_index`. 
+                    Type is `torch.bool`, with `True` indices corresponding to nodes 
+                    included in the subgraph.
+                exp['edge_imp'] (torch.Tensor, (e,)): Edge mask of size `(e,)` where `e` 
+                    is number of edges in the entire graph described by `edge_index`. 
+                    Type is `torch.bool`, with `True` indices corresponding to edges 
+                    included in the subgraph.
             khop_info (4-tuple of torch.Tensor):
                 0. the nodes involved in the subgraph
                 1. the filtered `edge_index`
                 2. the mapping from node indices in `node_idx` to their new location
-                3. the `edge_index` mask indicating which edges were preserved
-        """
-        label = self._predict(x.to(device), edge_index.to(device),
-                              forward_kwargs=forward_kwargs)# if label is None else label
-        num_hops = self.L if num_hops is None else num_hops
+                3. the `edge_index` mask indicating which edges were preserved 
+        '''
 
-        org_eidx = edge_index.clone().to(device)
+        if y is not None:
+            label = y[node_idx] # Get node_idx of label
 
-        khop_info = subset, sub_edge_index, mapping, hard_edge_mask = \
-            k_hop_subgraph(node_idx, num_hops, edge_index,
-                           relabel_nodes=True) #num_nodes=x.shape[0])
-        sub_x = x[subset].to(device)
-        
-        self._set_masks(sub_x.to(device), sub_edge_index.to(device), explain_feature=explain_feature)
+        if label is None:
+            self.model.eval()
+            pred = self.model(x.to(device), edge_index.to(device), **forward_kwargs)
+            label = int(pred.argmax(dim=1).item())
+        else:
+            label = int(label)
 
-        self.model.eval()
-        num_epochs = 200
+        # collect all the class index
+        logits = self.model(x.to(device), edge_index.to(device), **forward_kwargs)
+        probs = F.softmax(logits, dim=-1)
+        probs = probs.squeeze()
 
-        # Loss function for GNNExplainer's objective
-        def loss_fn(log_prob, mask, mask_type):
-            # Select the log prob and the label of node_idx
-            node_log_prob = log_prob[torch.where(subset==node_idx)].squeeze()
-            node_label = label[mapping]
-            # Maximize the probability of predicting the label (cross entropy)
-            loss = -node_log_prob[node_label].item()
-            a = mask.sigmoid()
-            # Size regularization
-            loss += self.coeff[mask_type]['size'] * torch.sum(a)
-            # Element-wise entropy regularization
-            # Low entropy implies the mask is close to binary
-            entropy = -a * torch.log(a + 1e-15) - (1-a) * torch.log(1-a + 1e-15)
-            loss += self.coeff[mask_type]['entropy'] * entropy.mean()
-            return loss
+        prediction = probs[node_idx].argmax(-1)
+        self.mcts_state_map = self.get_mcts_class(x, edge_index, node_idx=node_idx)
+        self.node_idx = self.mcts_state_map.node_idx
+        # mcts will extract the subgraph and relabel the nodes
+        # value_func = GnnNets_NC2value_func(self.model,
+        #                                     node_idx=self.mcts_state_map.node_idx,
+        #                                     target_class=label)
+        value_func = self._prob_score_func_node(
+            node_idx = self.mcts_state_map.node_idx,
+            target_class = label
+        )
+        #value_func = partial(value_func, forward_kwargs=forward_kwargs)
+        def wrap_value_func(data):
+            return value_func(x=data.x.to(device), edge_index=data.edge_index.to(device), forward_kwargs=forward_kwargs)
 
-        def train(mask, mask_type):
-            optimizer = torch.optim.Adam([mask], lr=0.01)
-            for epoch in range(1, num_epochs+1):
-                optimizer.zero_grad()
-                if mask_type == 'feature':
-                    h = sub_x.to(device) * mask.view(1, -1).sigmoid().to(device)
-                else:
-                    h = sub_x.to(device)
-                log_prob = self._predict(h.to(device), sub_edge_index.to(device), return_type='log_prob')
-                loss = loss_fn(log_prob, mask, mask_type)
-                loss.backward()
-                optimizer.step()
+        payoff_func = self.get_reward_func(wrap_value_func, node_idx=self.mcts_state_map.node_idx, explain_graph = False)
+        self.mcts_state_map.set_score_func(payoff_func)
+        results = self.mcts_state_map.mcts(verbose=False)
 
-        feat_imp = None
-        if explain_feature: # Get a feature mask
-            train(self.feature_mask, 'feature')
-            feat_imp = self.feature_mask.data.sigmoid()
+        # Get best result that has less than max nodes:
+        best_result = find_closest_node_result(results, max_nodes=max_nodes)
 
-        train(self.edge_mask, 'edge')
-        edge_imp = self.edge_mask.data.sigmoid().to(device)
+        # Need to parse results:
+        node_mask, edge_mask = self.__parse_results(best_result, edge_index)
 
-        # print('pre activation edge_imp:', edge_imp)
+        #print('args', node_idx, self.L, edge_index)
+        khop_info = k_hop_subgraph(node_idx, self.L, edge_index)
+        subgraph_edge_mask = khop_info[3] # Mask over edges
 
-        # print('IN GNNEXPLAINER')
-        # print('edge imp shape', edge_imp.shape)
-
-        self._clear_masks()
-
-        discrete_edge_mask = (edge_imp > 0.5) # Turn into bool activation because of sigmoid
-
-        khop_info = (subset, org_eidx[:,hard_edge_mask], mapping, hard_edge_mask)
-
+        # Set explanation
+        # exp = Explanation(
+        #     node_imp = 1*node_mask[khop_info[0]], # Apply node mask
+        #     edge_imp = 1*edge_mask[subgraph_edge_mask],
+        #     node_idx = node_idx
+        # )
         exp = Explanation(
-            feature_imp = feat_imp,
-            node_imp = node_mask_from_edge_mask(khop_info[0], khop_info[1], edge_mask = discrete_edge_mask),
-            edge_imp = discrete_edge_mask.float(),
+            node_imp = 1*node_mask, # Apply node mask
+            edge_imp = 1*edge_mask,
             node_idx = node_idx
         )
 
@@ -622,92 +1334,96 @@ class GNNExplainer(_BaseExplainer):
 
         return exp
 
-    def get_explanation_graph(self, x, edge_index, forward_kwargs = {}, lr = 0.01, ep=300):
-        r"""Learns and returns a node feature mask and an edge mask that play a
-        crucial role to explain the prediction made by the GNN for a graph.
-
+    def get_explanation_graph(self, 
+            x: Tensor, 
+            edge_index: Tensor, 
+            label: int = None, 
+            max_nodes: int = 14, 
+            forward_kwargs: dict = {}, 
+        ):
+        '''
+        Get explanation for a whole graph prediction.
         Args:
-            x (Tensor): The node feature matrix.
-            edge_index (LongTensor): The edge indices.
-            **kwargs (optional): Additional arguments passed to the GNN module.
+            x (torch.Tensor): Input features for every node in the graph.
+            edge_index (torch.Tensor): Edge index for entire input graph.
+            label (int, optional): Label for which to assume as a prediction from 
+                the model when generating an explanation. If `None`, this argument 
+                is set to the prediction directly from the model. (default: :obj:`None`)
+            max_nodes (int, optional): Maximum number of nodes to include in the subgraph 
+                generated from the explanation. (default: :obj:`14`)
+            forward_kwargs (dict, optional): Additional arguments to model.forward 
+                beyond x and edge_index. Must be keyed on argument name. 
+                (default: :obj:`{}`)
 
-        :rtype: (:class:`Tensor`, :class:`Tensor`)
-        """
+        :rtype: :class:`Explanation`
+        Returns:
+            exp (dict):
+                exp['feature_imp'] is `None` because no feature explanations are generated.
+                exp['node_imp'] (torch.Tensor, (n,)): Node mask of size `(n,)` where `n` 
+                    is number of nodes in the entire graph described by `edge_index`. 
+                    Type is `torch.bool`, with `True` indices corresponding to nodes 
+                    included in the subgraph.
+                exp['edge_imp'] (torch.Tensor, (e,)): Edge mask of size `(e,)` where `e` 
+                    is number of edges in the entire graph described by `edge_index`. 
+                    Type is `torch.bool`, with `True` indices corresponding to edges 
+                    included in the subgraph.
+        '''
+        if label is None:
+            self.model.eval()
+            pred = self.model(x, edge_index, **forward_kwargs).argmax(dim=1)
+            #label = int(pred.argmax(dim=1).item())
+        # collect all the class index
+        logits = self.model(x, edge_index, **forward_kwargs)
+        probs = F.softmax(logits, dim=-1)
+        probs = probs.squeeze()
 
-        self.model.eval()
-        self._clear_masks()
+        prediction = probs.argmax(-1)
+        value_func = self._prob_score_func_graph(target_class = label)
+        def wrap_value_func(data):
+            return value_func(x=data.x, edge_index=data.edge_index, forward_kwargs=forward_kwargs)
 
-        # all nodes belong to same graph
-        # batch = torch.zeros(x.shape[0], dtype=int, device=x.device)
+        payoff_func = self.get_reward_func(wrap_value_func, explain_graph = True)
+        self.mcts_state_map = self.get_mcts_class(x, edge_index, score_func=payoff_func, explain_graph = True)
+        results = self.mcts_state_map.mcts(verbose=False)
+        best_result = find_closest_node_result(results, max_nodes=max_nodes)
 
-        # Get the initial prediction.
-        with torch.no_grad():
-            log_logits = self._predict(x.to(device), edge_index.to(device), forward_kwargs = forward_kwargs, return_type='log_prob')
-            pred_label = log_logits.argmax(dim=-1)
-
-        self._set_masks(x, edge_index, edge_mask = None, explain_feature = True, device = x.device)
-        parameters = [self.feature_mask, self.edge_mask]
-        optimizer = torch.optim.Adam(parameters, lr=lr)
-
-        def loss_fn(node_idx, log_logits, pred_label):
-            if node_idx != -1:
-                loss = -log_logits[node_idx, pred_label[node_idx]]
-            else:
-                loss = -log_logits[0, pred_label[0]]
-
-            m = self.edge_mask.sigmoid()
-            #edge_reduce = getattr(torch, self.coeffs['edge_reduction'])
-            loss = loss + self.coeff['edge']['size'] * torch.sum(m)
-            ent = -m * torch.log(m + EPS) - (1 - m) * torch.log(1 - m + EPS)
-            #loss = loss + self.coeffs['edge_ent'] * ent.mean()
-            loss = loss + self.coeff['edge']['entropy'] * ent.mean()
-
-            m = self.feature_mask.sigmoid()
-            loss = loss + self.coeff['feature']['size'] * torch.sum(m)
-            ent = -m * torch.log(m + EPS) - (1 - m) * torch.log(1 - m + EPS)
-            #loss = loss + self.coeffs['node_feat_ent'] * ent.mean()
-            loss = loss + self.coeff['feature']['entropy'] * ent.mean()
-
-            return loss
-
-        num_epochs = ep # TODO: make more general
-        for epoch in range(1, num_epochs + 1):
-            optimizer.zero_grad()
-            h = x * self.feature_mask.sigmoid()
-
-            log_logits = self._predict(h.to(device), edge_index.to(device), forward_kwargs = forward_kwargs, return_type='log_prob')
-
-            loss = loss_fn(-1, log_logits, pred_label)
-            loss.backward()
-            optimizer.step()
-
-        feature_mask = self.feature_mask.detach().sigmoid().squeeze()
-        edge_mask = self.edge_mask.detach().sigmoid()
-
-        self._clear_masks()
-
-        node_imp = node_mask_from_edge_mask(
-            torch.arange(x.shape[0]).to(x.device), 
-            edge_index, 
-            (edge_mask > 0.5)) # Make edge mask into discrete and convert to node mask
-        print(node_imp)
-        print(edge_mask)
+        node_mask, edge_mask = self.__parse_results(best_result, edge_index)
         exp = Explanation(
-            feature_imp = feature_mask,
-            node_imp = node_imp.float(),
-            edge_imp = edge_mask 
+            node_imp = node_mask.float(),
+            edge_imp = edge_mask.float()
         )
-
+        # exp.node_imp = node_mask
+        # exp.edge_imp = edge_mask
         exp.set_whole_graph(Data(x=x, edge_index=edge_index))
 
+        #return {'feature_imp': None, 'node_imp': node_mask, 'edge_imp': edge_mask}
         return exp
 
-    def get_explanation_link(self):
-        """
-        Explain a link prediction.
-        """
-        raise NotImplementedError()
-        
+    def __parse_results(self, best_subgraph, edge_index):
+        # Function strongly based on torch_geometric.utils.subgraph function
+        # Citation: https://pytorch-geometric.readthedocs.io/en/latest/_modules/torch_geometric/utils/subgraph.html#subgraph
+
+        # Get mapping
+        map = best_subgraph.mapping
+
+        all_nodes = torch.unique(edge_index)
+
+        subgraph_nodes = torch.tensor([map[c] for c in best_subgraph.coalition], dtype=torch.long) if map is not None \
+            else torch.tensor(best_subgraph.coalition, dtype=torch.long)
+
+        # Create node mask:
+        node_mask = torch.zeros(all_nodes.shape, dtype=torch.bool)
+        node_mask[subgraph_nodes] = 1
+
+        # Create edge_index mask
+        num_nodes = maybe_num_nodes(edge_index)
+        n_mask = torch.zeros(num_nodes, dtype = torch.bool)
+        n_mask[subgraph_nodes] = 1
+
+        edge_mask = n_mask[edge_index[0]] & n_mask[edge_index[1]]
+        return node_mask, edge_mask
+
+
     
 def graph_exp_acc(gt_exp, generated_exp, node_thresh_factor = 0.5) -> float:
     '''
@@ -742,46 +1458,13 @@ def graph_exp_acc(gt_exp, generated_exp, node_thresh_factor = 0.5) -> float:
     JAC = TP / (TP + FP + FN + EPS)
     prec = TP / (TP + FP + EPS)
     rec = TP / (TP + FN + EPS)
-    return JAC, prec, rec
+    num = (2 * prec * rec)
+    if num == 0:
+        F1 = 0
+    else:
+        F1 = num / (prec + rec)
+    return JAC, prec, rec, F1
     
-def graph_exp_acc_gnn(gt_exp, generated_exp) -> float:
-    '''
-    Args:
-        gt_exp (Explanation): Ground truth explanation from the dataset.
-        generated_exp (Explanation): Explanation output by an explainer.
-    '''
-    EPS = 1e-09
-    JAC_edge = None
-    JAC_edge = []
-    prec_edge = []
-    rec_edge = []
-    
-    TPs = []
-    FPs = []
-    FNs = []
-    true_edges = torch.where(gt_exp.edge_imp == 1)[0]
-    for edge in range(gt_exp.edge_imp.shape[0]):
-        if generated_exp.edge_imp[edge]:
-            if edge in true_edges:
-                TPs.append(edge)
-            else:
-                FPs.append(edge)
-        else:
-            if edge in true_edges:
-                FNs.append(edge)
-    TP = len(TPs)
-    FP = len(FPs)
-    FN = len(FNs)
-    JAC_edge.append(TP / (TP + FP + FN + EPS))
-    prec_edge.append(TP / (TP + FP + EPS))
-    rec_edge.append(TP / (TP + FN + EPS))
-    
-    JAC = max(JAC_edge)
-    JAC_edge = np.array(JAC_edge)
-    prec = prec_edge[np.argmax(JAC_edge)]
-    rec = rec_edge[np.argmax(JAC_edge)]
-    return JAC, prec, rec
-
 def to_networkx_conv(data, node_attrs=None, edge_attrs=None, to_undirected=False,
                 remove_self_loops=False, get_map = False):
     r"""Converts a :class:`torch_geometric.data.Data` instance to a
@@ -3068,6 +3751,252 @@ class ShapeGGen(NodeDataset):
         if show:
             plt.show()
 
+class GCN(torch.nn.Module):
+    def __init__(self, hidden_channels, input_feat, classes):
+        super(GCN, self).__init__()
+        self.conv1 = GCNConv(input_feat, hidden_channels)
+        self.conv2 = GCNConv(hidden_channels, classes)
+
+    def forward(self, x, edge_index):
+        x = self.conv1(x, edge_index)
+        x = x.relu()
+        x = F.dropout(x, p=0.5, training=self.training)
+        x = self.conv2(x, edge_index)
+        return x
+def faithfulness(model, X, G, edge_mask):
+    # For this metric, smaller = better
+    # Smaller implies model results on just the explainer graph are closer to the original results
+    org_vec = model(X, G)
+    lst = []
+    for i in range(0, edge_mask.shape[0]):
+        if edge_mask[i] >= 0.5:
+            lst.append(i)
+    g = G[:, lst]
+    pert_vec = model(X, g)
+    org_softmax = F.softmax(org_vec, dim=-1)
+    pert_softmax = F.softmax(pert_vec, dim=-1)
+    res = 1 - torch.exp(-F.kl_div(org_softmax.log(), pert_softmax, None, None, 'sum')).item()
+    return res
+
+class GNNExplainer(_BaseExplainer):
+    """
+    GNNExplainer: node only
+    """
+    def __init__(self, model: torch.nn.Module, coeff: dict = None):
+        """
+        Args:
+            model (torch.nn.Module): model on which to make predictions
+                The output of the model should be unnormalized class score.
+                For example, last layer = CNConv or Linear.
+            coeff (dict, optional): coefficient of the entropy term and the size term
+                for learning edge mask and node feature mask
+                Default setting:
+                    coeff = {'edge': {'entropy': 1.0, 'size': 0.005},
+                             'feature': {'entropy': 0.1, 'size': 1.0}}
+        """
+        super().__init__(model)
+        if coeff is not None:
+            self.coeff = coeff
+        else:
+            self.coeff = {'edge': {'entropy': 1.0, 'size': 0.005},
+                          'feature': {'entropy': 0.1, 'size': 1.0}}
+
+    def get_explanation_node(self, 
+            node_idx: int, 
+            x: torch.Tensor,                 
+            edge_index: torch.Tensor,
+            label: torch.Tensor = None,
+            num_hops: int = None,
+            explain_feature: bool = True,
+            y = None,
+            forward_kwargs: dict = {}):
+        """
+        Explain a node prediction.
+
+        Args:
+            node_idx (int): index of the node to be explained
+            edge_index (torch.Tensor, [2 x m]): edge index of the graph
+            x (torch.Tensor, [n x d]): node features
+            label (torch.Tensor, optional, [n x ...]): labels to explain
+                If not provided, we use the output of the model.
+            num_hops (int, optional): number of hops to consider
+                If not provided, we use the number of graph layers of the GNN.
+            explain_feature (bool): whether to compute the feature mask or not
+                (:default: :obj:`True`)
+            forward_kwargs (dict, optional): additional arguments to model.forward
+                beyond x and edge_index
+
+        Returns:
+            exp (dict):
+                exp['feature_imp'] (torch.Tensor, [d]): feature mask explanation
+                exp['edge_imp'] (torch.Tensor): k-hop edge importance
+            khop_info (4-tuple of torch.Tensor):
+                0. the nodes involved in the subgraph
+                1. the filtered `edge_index`
+                2. the mapping from node indices in `node_idx` to their new location
+                3. the `edge_index` mask indicating which edges were preserved
+        """
+        label = self._predict(x.to(device), edge_index.to(device),
+                              forward_kwargs=forward_kwargs)# if label is None else label
+        num_hops = self.L if num_hops is None else num_hops
+
+        org_eidx = edge_index.clone().to(device)
+
+        khop_info = subset, sub_edge_index, mapping, hard_edge_mask = \
+            k_hop_subgraph(node_idx, num_hops, edge_index,
+                           relabel_nodes=True) #num_nodes=x.shape[0])
+        sub_x = x[subset].to(device)
+        
+        self._set_masks(sub_x.to(device), sub_edge_index.to(device), explain_feature=explain_feature)
+
+        self.model.eval()
+        num_epochs = 200
+
+        # Loss function for GNNExplainer's objective
+        def loss_fn(log_prob, mask, mask_type):
+            # Select the log prob and the label of node_idx
+            node_log_prob = log_prob[torch.where(subset==node_idx)].squeeze()
+            node_label = label[mapping]
+            # Maximize the probability of predicting the label (cross entropy)
+            loss = -node_log_prob[node_label].item()
+            a = mask.sigmoid()
+            # Size regularization
+            loss += self.coeff[mask_type]['size'] * torch.sum(a)
+            # Element-wise entropy regularization
+            # Low entropy implies the mask is close to binary
+            entropy = -a * torch.log(a + 1e-15) - (1-a) * torch.log(1-a + 1e-15)
+            loss += self.coeff[mask_type]['entropy'] * entropy.mean()
+            return loss
+
+        def train(mask, mask_type):
+            optimizer = torch.optim.Adam([mask], lr=0.01)
+            for epoch in range(1, num_epochs+1):
+                optimizer.zero_grad()
+                if mask_type == 'feature':
+                    h = sub_x.to(device) * mask.view(1, -1).sigmoid().to(device)
+                else:
+                    h = sub_x.to(device)
+                log_prob = self._predict(h.to(device), sub_edge_index.to(device), return_type='log_prob')
+                loss = loss_fn(log_prob, mask, mask_type)
+                loss.backward()
+                optimizer.step()
+
+        feat_imp = None
+        if explain_feature: # Get a feature mask
+            train(self.feature_mask, 'feature')
+            feat_imp = self.feature_mask.data.sigmoid()
+
+        train(self.edge_mask, 'edge')
+        edge_imp = self.edge_mask.data.sigmoid().to(device)
+
+        # print('pre activation edge_imp:', edge_imp)
+
+        # print('IN GNNEXPLAINER')
+        # print('edge imp shape', edge_imp.shape)
+
+        self._clear_masks()
+
+        discrete_edge_mask = (edge_imp > 0.5) # Turn into bool activation because of sigmoid
+
+        khop_info = (subset, org_eidx[:,hard_edge_mask], mapping, hard_edge_mask)
+
+        exp = Explanation(
+            feature_imp = feat_imp,
+            node_imp = node_mask_from_edge_mask(khop_info[0], khop_info[1], edge_mask = discrete_edge_mask),
+            edge_imp = discrete_edge_mask.float(),
+            node_idx = node_idx
+        )
+
+        exp.set_enclosing_subgraph(khop_info)
+
+        return exp
+
+    def get_explanation_graph(self, x, edge_index, forward_kwargs = {}, lr = 0.01, ep=300):
+        r"""Learns and returns a node feature mask and an edge mask that play a
+        crucial role to explain the prediction made by the GNN for a graph.
+
+        Args:
+            x (Tensor): The node feature matrix.
+            edge_index (LongTensor): The edge indices.
+            **kwargs (optional): Additional arguments passed to the GNN module.
+
+        :rtype: (:class:`Tensor`, :class:`Tensor`)
+        """
+
+        self.model.eval()
+        self._clear_masks()
+
+        # all nodes belong to same graph
+        # batch = torch.zeros(x.shape[0], dtype=int, device=x.device)
+
+        # Get the initial prediction.
+        with torch.no_grad():
+            log_logits = self._predict(x.to(device), edge_index.to(device), forward_kwargs = forward_kwargs, return_type='log_prob')
+            pred_label = log_logits.argmax(dim=-1)
+
+        self._set_masks(x, edge_index, edge_mask = None, explain_feature = True, device = x.device)
+        parameters = [self.feature_mask, self.edge_mask]
+        optimizer = torch.optim.Adam(parameters, lr=lr)
+
+        def loss_fn(node_idx, log_logits, pred_label):
+            if node_idx != -1:
+                loss = -log_logits[node_idx, pred_label[node_idx]]
+            else:
+                loss = -log_logits[0, pred_label[0]]
+
+            m = self.edge_mask.sigmoid()
+            #edge_reduce = getattr(torch, self.coeffs['edge_reduction'])
+            loss = loss + self.coeff['edge']['size'] * torch.sum(m)
+            ent = -m * torch.log(m + EPS) - (1 - m) * torch.log(1 - m + EPS)
+            #loss = loss + self.coeffs['edge_ent'] * ent.mean()
+            loss = loss + self.coeff['edge']['entropy'] * ent.mean()
+
+            m = self.feature_mask.sigmoid()
+            loss = loss + self.coeff['feature']['size'] * torch.sum(m)
+            ent = -m * torch.log(m + EPS) - (1 - m) * torch.log(1 - m + EPS)
+            #loss = loss + self.coeffs['node_feat_ent'] * ent.mean()
+            loss = loss + self.coeff['feature']['entropy'] * ent.mean()
+
+            return loss
+
+        num_epochs = ep # TODO: make more general
+        for epoch in range(1, num_epochs + 1):
+            optimizer.zero_grad()
+            h = x * self.feature_mask.sigmoid()
+
+            log_logits = self._predict(h.to(device), edge_index.to(device), forward_kwargs = forward_kwargs, return_type='log_prob')
+
+            loss = loss_fn(-1, log_logits, pred_label)
+            loss.backward()
+            optimizer.step()
+
+        feature_mask = self.feature_mask.detach().sigmoid().squeeze()
+        edge_mask = self.edge_mask.detach().sigmoid()
+
+        self._clear_masks()
+
+        node_imp = node_mask_from_edge_mask(
+            torch.arange(x.shape[0]).to(x.device), 
+            edge_index, 
+            (edge_mask > 0.5)) # Make edge mask into discrete and convert to node mask
+        print(node_imp)
+        print(edge_mask)
+        exp = Explanation(
+            feature_imp = feature_mask,
+            node_imp = node_imp.float(),
+            edge_imp = edge_mask 
+        )
+
+        exp.set_whole_graph(Data(x=x, edge_index=edge_index))
+
+        return exp
+
+    def get_explanation_link(self):
+        """
+        Explain a link prediction.
+        """
+        raise NotImplementedError()
+
         
 data = sys.argv[1]
 lst = []
@@ -3105,6 +4034,12 @@ elif data == 'lessinform':
     set_seed(seed)
     Gr = ShapeGGen(shape = 'house', num_subgraphs = 1200, prob_connection = 0.006, subgraph_size = 11, n_features = 21, n_informative = 4, class_sep = 0.6, 
                         n_clusters_per_class = 2, sens_attribution_noise = 0.5, homophily_coef = 1)
+    lr = 0.05
+    wd = 0.001
+elif data == 'test':
+    seed = 1000
+    set_seed(seed)
+    Gr = ShapeGGen(shape = 'house', num_subgraphs = 100, prob_connection = 0.006, subgraph_size = 11, n_features = 11, n_informative = 8, class_sep = 0.6, n_clusters_per_class = 2, sens_attribution_noise = 0.5, homophily_coef = 1)
     lr = 0.05
     wd = 0.001
 else:
@@ -3267,6 +4202,71 @@ if sys.argv[2] == 'Beta' or sys.argv[2] == 'beta':
         lst.append([sys.argv[1], 'Beta', i, ep, runtime, avg_runtime])
     df = pd.DataFrame(lst, columns=['Data', 'Explainer', 'Experiment', '# Epochs', 'Full Runtime', 'Average Runtime'])
     df.to_csv(f'time/{sys.argv[1]}BetaRuntimes.csv')
+elif sys.argv[2] == 'SubgraphX':
+    m = sys.argv[1]
+    if m == 'base':
+        rollout = 5
+        min_atoms = 8
+        c_puct = 4.763396105210084
+        expand_atoms = 16
+        sample_num = 10
+        idxs = 8966
+        gid = 277
+    elif m == 'hetero':
+        rollout = 6
+        min_atoms = 10
+        c_puct = 7.948316238894563
+        expand_atoms = 6
+        sample_num = 3
+        idxs = 7324
+        gid = 715
+    elif m == 'unfair':
+        rollout = 8
+        min_atoms = 7
+        c_puct = 6.933836891280444
+        expand_atoms = 8
+        sample_num = 8
+        idxs = 3046
+        gid = 37
+    elif m == 'lessinform':
+        rollout = 5
+        min_atoms = 4
+        c_puct = 4.919019371456805
+        expand_atoms = 4
+        sample_num = 3
+        idxs = 2913
+        gid = 437
+    elif m == 'moreinform':
+        rollout = 7
+        min_atoms = 9
+        c_puct = 7.318672180500459
+        expand_atoms = 3
+        sample_num = 10
+        idxs = 3403
+        gid = 69
+    elif m == 'test':
+        rollout = 1
+        min_atoms = 1
+        c_puct = 1
+        expand_atoms = 1
+        sample_num = 1
+        idxs = 1
+        gid = 1
+    else:
+        print('not an option')
+    for i in range(0, ru):
+        start = time.time()
+        explainer = SubgraphX(model, rollout = rollout, min_atoms = min_atoms, c_puct = c_puct,
+                              expand_atoms = expand_atoms, sample_num = sample_num)
+        expgnn = explainer.get_explanation_node(data.x, data.edge_index, idxs, y = data.y)
+        end = time.time()
+        runtime = end - start
+        avg_runtime = 'n/a'
+        print(f'SubgraphX, Sparsity: {sys.argv[1]}, Runtime: {runtime}, Average: {avg_runtime}')
+        ep = 'n/a'
+        lst.append([sys.argv[1], 'Beta', i, ep, runtime, avg_runtime])
+    df = pd.DataFrame(lst, columns=['Data', 'Explainer', 'Experiment', '# Epochs', 'Full Runtime', 'Average Runtime'])
+    df.to_csv(f'time/{sys.argv[1]}SubgraphXRuntimes.csv')  
 else:
     print('GNN!')
     if sys.argv[1] == 'base':
