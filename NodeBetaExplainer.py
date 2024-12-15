@@ -8,28 +8,21 @@ from pyro.infer import SVI, Trace_ELBO
 
 
 class BetaExplainer:
-    '''This is a post-hoc explainer based on the Beta Distribution for node classification.'''
-    def __init__(self, model: torch.nn.Module, X: torch.Tensor, G: torch.Tensor, device: torch.device, a=0.7, b=0.9):
-        '''
-            Initialization of the model. 
-            Model = trained GNN
-            X = node features for all data
-            G = edge index for graph
-            device = device to save outputs to
-            num_graphs = number of graphs
-            alpha = alpha parameter for the Beta distribution
-            beta = beta parameter for the Beta distribution
-        '''
+    '''This is a post-hoc explainer based on the Beta Distribution.'''
+    def __init__(self, model, X, G, device, a, b):
+        '''Initialization of the model.'''
         self.model = model
         self.X = X
         self.G = G
-        with torch.no_grad(): # generate basic model output
-            self.target = self.model(self.X, self.G).flatten()
-
+        self.device = device
+        with torch.no_grad():
+            self.target = self.model(self.X, self.G)
+            self.target = self.target.flatten()
         self.ne = G.shape[1]
-        self.N = max(X.shape[0], self.ne)
+        self.N = max(self.X.shape[1], self.X.shape[0], G.shape[1])
         self.obs = 1000
         self.device = device
+        self.loss = []
         self.a = a
         self.b = b
 
@@ -40,22 +33,20 @@ class BetaExplainer:
         beta_edges = beta[self.G[1, :]]
         m = pyro.sample("mask", dist.Beta(alpha_edges, beta_edges).to_event(1))
         set_masks(self.model, m, self.G, False)
-        preds = self.model(self.X, self.G).exp().flatten()
+        preds = self.model(self.X, self.G)
+        preds = preds.exp().flatten()
         with pyro.plate("data_loop"):
             pyro.sample("obs", dist.Categorical(preds), obs=ys)
 
     def guide(self, ys):
         alpha = pyro.param("alpha_q", self.a * torch.ones(self.N).to(self.device), constraint=constraints.positive)
-        while alpha.shape[1] < self.N:
-            alpha = pyro.param("alpha_q", self.a * torch.ones(self.N).to(self.device), constraint=constraints.positive)
         beta = pyro.param("beta_q", self.b * torch.ones(self.N).to(self.device), constraint=constraints.positive)
-        while beta.shape[1] < self.N:
-            beta = pyro.param("beta_q", self.a * torch.ones(self.N).to(self.device), constraint=constraints.positive)
         alpha_edges = alpha[self.G[0, :]]
         beta_edges = beta[self.G[1, :]]
         m = pyro.sample("mask", dist.Beta(alpha_edges, beta_edges).to_event(1))
         set_masks(self.model, m, self.G, False)
-        self.model(self.X, self.G).exp().flatten()
+        init = self.model(self.X, self.G)
+        init.exp().flatten()
 
     def train(self, epochs: int, lr: float = 0.0005):
         adam_params = {"lr": lr, "betas": (0.90, 0.999)}
@@ -67,13 +58,13 @@ class BetaExplainer:
             ys = torch.distributions.categorical.Categorical(self.target.exp()).sample(torch.Size([self.obs]))
             elbo = svi.step(ys)
             elbos.append(elbo)
+            self.loss.append([elbo, epoch, epochs])
             if epoch > 249:
                 elbos.pop(0)
 
         clear_masks(self.model)
 
     def edge_mask(self):
-        ''' Return edge mask with one probability per edge '''
         m = torch.distributions.beta.Beta(pyro.param("alpha_q").detach()[self.G[0, :]], pyro.param("beta_q").detach()[self.G[1, :]]).sample(torch.Size([10000]))
         return m.mean(dim=0)
 
