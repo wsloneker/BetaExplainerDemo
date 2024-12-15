@@ -10,7 +10,7 @@ from pyro.infer import SVI, Trace_ELBO
 
 class BetaExplainer:
     '''This is a post-hoc explainer based on the Beta Distribution.'''
-    def __init__(self, model: torch.nn.Module, data: torch.Tensor, G: torch.Tensor, device: torch.device, sz, a=0.7, b=0.9):
+    def __init__(self, model: torch.nn.Module, data: torch.Tensor, G: torch.Tensor, device: torch.device, sz, a, b):
         '''Initialization of the model.'''
         self.model = model
         self.X = data
