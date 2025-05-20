@@ -6,10 +6,15 @@ We present BetaExplainer, a new GNN explainer method. This formulation takes adv
 
 ## Requirements
 Python: 3.12.7
+
 PyTorch Version: 2.7.0
+
 PytorchGeometric: 2.6
+
 Pyro-PPL: 1.9.1
+
 To install requirements:
+
 pip install -r requirements.txt
 
 ## Preprocessing
