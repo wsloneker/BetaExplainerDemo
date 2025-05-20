@@ -4021,7 +4021,17 @@ def return_ShapeGGen_dataset(data):
         set_seed(seed)
         Gr = ShapeGGen(shape = 'house', num_subgraphs = 1200, prob_connection = 0.006, subgraph_size = 11, n_features = 21, n_informative = 4, class_sep = 0.6, n_clusters_per_class = 2, sens_attribution_noise = 0.5, homophily_coef = 1)
     else:
-         seed = 1000
-    set_seed(seed)
-    Gr = ShapeGGen(shape = 'house', num_subgraphs = 100, prob_connection = 0.006, subgraph_size = 11, n_features = 11, n_informative = 8, class_sep = 0.6, n_clusters_per_class = 2, sens_attribution_noise = 0.5, homophily_coef = 1)
-    return Gr
+        seed = 1000
+        set_seed(seed)
+        Gr = ShapeGGen(shape = 'house', num_subgraphs = 100, prob_connection = 0.006, subgraph_size = 11, n_features = 11, n_informative = 8, class_sep = 0.6, n_clusters_per_class = 2, sens_attribution_noise = 0.5, homophily_coef = 1)
+    graph = Gr.generate_shape_graph()
+    data = Gr.graph
+    train_mask = Gr.fixed_train_mask
+    test_mask = Gr.fixed_test_mask
+    val_mask = Gr.fixed_valid_mask
+    num_classes = len(np.unique(data.y))
+    y = data.y
+    x = data.x
+    edge_index = data.edge_index
+    gt_exp = Gr.explanations
+    return x, y, edge_index, gt_exp, train_mask, test_mask, val_mask

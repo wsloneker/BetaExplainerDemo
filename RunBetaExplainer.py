@@ -120,7 +120,7 @@ def sergio_metrics(gt_grn, prediction_mask, false_negative_base):
     else:
         f1 = 0
     return acc, prec, rec, f1
-shapeggen = ['base', 'heterophilic', 'unfair', 'moreinform', 'lessinform']
+shapeggen = ['base', 'heterophilic', 'unfair', 'moreinform', 'lessinform', 'test']
 sergio = ['25', '50']
 conv_type = sys.argv[3]
 if sys.argv[4] == 'True':
@@ -132,17 +132,8 @@ if sys.argv[1] in shapeggen:
         num_features = 22
     else:
         num_features = 12
-    Gr = return_ShapeGGen_dataset(sys.argv[1])
-    graph = Gr.generate_shape_graph()
-    data = Gr.graph
-    train_mask = Gr.fixed_train_mask
-    test_mask = Gr.fixed_test_mask
-    val_mask = Gr.fixed_valid_mask
-    num_classes = len(np.unique(data.y))
-    y = data.y
-    x = data.x
-    edge_index = data.edge_index
-    gt_exp = Gr.explanations
+    x, y, edge_index, gt_exp, train_mask, test_mask, val_mask = return_ShapeGGen_dataset(sys.argv[1])
+    num_classes = np.unique(y.numpy()).shape[0]
     num_hops = 3
     from NodeBetaExplainer import BetaExplainer
 elif sys.argv[1] in sergio:
@@ -402,7 +393,7 @@ def model_objective(trial):
     return test_acc
 pruner = optuna.pruners.MedianPruner()
 study = optuna.create_study(direction='maximize', sampler=optuna.samplers.TPESampler(), pruner=pruner)
-study.optimize(model_objective, n_trials=150)
+study.optimize(model_objective, n_trials=5)
 print('Best hyperparameters:', study.best_params)
 print('Best Result:', study.best_value)
 lr = study.best_params['lrs']
@@ -587,14 +578,14 @@ def graph_objective(trial):
 pruner = optuna.pruners.MedianPruner()
 study = optuna.create_study(direction='maximize', sampler=optuna.samplers.TPESampler(), pruner=pruner)
 if sys.argv[1] in shapeggen:
-    study.optimize(graph_objective, n_trials=150)
+    study.optimize(graph_objective, n_trials=5)
 elif sys.argv[1] in sergio:
-    study.optimize(sergio_objective, n_trials=150)
+    study.optimize(sergio_objective, n_trials=5)
 else:
     if sys.argv[2] == 'node':
-        study.optimize(node_objective, n_trials=150)
+        study.optimize(node_objective, n_trials=5)
     else:
-        study.optimize(graph_objective, n_trials=50)
+        study.optimize(graph_objective, n_trials=5)
 print('Best hyperparameters:', study.best_params)
 print('Best Result:', study.best_value)
 

@@ -8,3 +8,4 @@
 /Param Sweep/data/.ipynb_checkpoints
 /Results/.ipynb_checkpoints
 /Results/data/.ipynb_checkpoints
+*.pyc
