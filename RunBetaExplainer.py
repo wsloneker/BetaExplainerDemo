@@ -13,6 +13,7 @@ from torch_geometric.explain import Explainer, GNNExplainer, PGExplainer
 from torch.nn import functional as F
 from tqdm import tqdm
 from sklearn.metrics import mean_squared_error, precision_score, recall_score, f1_score, accuracy_score
+from torch_geometric.utils import k_hop_subgraph, to_undirected
 # Takes 4 arguments
 # Argument 1: Denotes data type; specify 25 or 50 for the 25% and 50% sparse SERGIO datasets; base, hetero, unfair, lessinform, or more inform for ShapeGGen Simulator datasets; specify file name for other files (assumed to be of format labels = f"Labels{file_name}', features = f"Features{file_name}', edge_index = f"EdgeIndex{file_name}' where file_name includes the file type (of csv, npy, tsv, or xlsx) consistant across all types, features is node/graph by number of features, labels if in a csv/tsv/excel is in column "Labels", and edge indices in a csv/tsv/excel is assumed to be in columns "P1" and "P2" denoting connectivity)
 # Argument 2: denotes classification problem type; important for specified files
@@ -135,7 +136,6 @@ if sys.argv[1] in shapeggen:
     x, y, edge_index, gt_exp, train_mask, test_mask, val_mask = return_ShapeGGen_dataset(sys.argv[1])
     num_classes = np.unique(y.numpy()).shape[0]
     num_hops = 3
-    from NodeBetaExplainer import BetaExplainer
 elif sys.argv[1] in sergio:
     adj, features, labels, num_features, num_classes, gt_grn, false_negative_base = get_sergio_data(sys.argv[1])
     edge_index = torch.tensor(adj, dtype=torch.int64)
@@ -174,7 +174,6 @@ elif sys.argv[1] in sergio:
     y = torch.tensor(labels)
     train_loader = DataLoader(train_dataset, batch_size=num_train, shuffle=True)
     test_loader = DataLoader(test_dataset, batch_size=num_test, shuffle=False)
-    from GraphBetaExplainer import BetaExplainer
 else:    
     adj, features, labels, num_features, num_classes = get_general_data(sys.argv[1])
     edge_index = torch.tensor(adj, dtype=torch.int64)
@@ -237,7 +236,6 @@ else:
         train_mask = torch.tensor(train_mask)
         test_mask = torch.tensor(test_mask)
         val_mask = torch.tensor(val_mask)
-        from NodeBetaExplainer import BetaExplainer
     else:
         edge_weight = torch.ones(num_edges)
         num_graphs = len(labels)
@@ -264,7 +262,7 @@ else:
         y = torch.tensor(labels)
         graph_data = torch_geometric.data.Batch.from_data_list(graph_data)
         graph_data = DataLoader(graph_data, batch_size=num_graphs)
-        dataset = graph_data
+        print(graph_data)
         train_dataset = torch_geometric.data.Batch.from_data_list(train_dataset)
         test_dataset = torch_geometric.data.Batch.from_data_list(test_dataset)
         feat = torch.tensor(features)
@@ -272,13 +270,12 @@ else:
         y = torch.tensor(labels)
         train_loader = DataLoader(train_dataset, batch_size=num_train, shuffle=True)
         test_loader = DataLoader(test_dataset, batch_size=num_test, shuffle=False)
-        from GraphBetaExplainer import BetaExplainer
 if sys.argv[2] == 'graph':
     input_features = 1
 else:
     input_features = num_features
 device = torch.device('cpu')
-
+import NodeBetaExplainer, GraphBetaExplainer
 class GCN(torch.nn.Module):
     def __init__(self, num_features, hidden_channels, output_size, num_layers, conv_type, heads):
         super(GCN, self).__init__()
@@ -339,9 +336,10 @@ def model_objective(trial):
     criterion = torch.nn.CrossEntropyLoss()
     model = GCN(input_features, hcs, num_classes, layers, conv_type, heads)
     optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=wd)
+    num_epochs = 15
     if sys.argv[2] == 'node':
         y_true = y.numpy()
-        for epoch in range(1, 26):
+        for epoch in range(1, num_epochs + 1):
             model.train()
             optimizer.zero_grad()
             out = model(x, edge_index)
@@ -356,7 +354,7 @@ def model_objective(trial):
             val_acc, prec, rec, f1 = evaluate(y_pred[val_mask], y_true[val_mask])
             # print(f'Epoch: {epoch:03d}, Train Acc: {train_acc:.4f}, Test Acc: {test_acc:.4f}, Val Acc: {val_acc:.4f}, Loss: {loss:.4f}')
     else:
-        for epoch in range(1, 26):
+        for epoch in range(1, num_epochs + 1):
             model.train()
             avgLoss = 0
             for data in tqdm(train_loader, total=47):  # Iterate in batches over the training dataset.
@@ -393,7 +391,11 @@ def model_objective(trial):
     return test_acc
 pruner = optuna.pruners.MedianPruner()
 study = optuna.create_study(direction='maximize', sampler=optuna.samplers.TPESampler(), pruner=pruner)
-study.optimize(model_objective, n_trials=5)
+study.optimize(model_objective, n_trials=1)
+if sys.argv[1] in shapeggen:
+    num_epochs = 2000
+else:
+    num_epochs = 250
 print('Best hyperparameters:', study.best_params)
 print('Best Result:', study.best_value)
 lr = study.best_params['lrs']
@@ -407,7 +409,7 @@ print(model)
 optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=wd)
 if sys.argv[2] == 'node':
     y_true = y.numpy()
-    for epoch in range(1, 2001):
+    for epoch in range(1, num_epochs):
         model.train()
         optimizer.zero_grad()
         out = model(x, edge_index)
@@ -422,7 +424,7 @@ if sys.argv[2] == 'node':
         val_acc, val_prec, val_rec, val_f1  = evaluate(y_pred[val_mask], y_true[val_mask])
         print(f'Epoch: {epoch:03d}, Train Acc: {train_acc:.4f}, Test Acc: {test_acc:.4f}, Val Acc: {val_acc:.4f}, Loss: {loss:.4f}')
 else:
-    for epoch in range(1, 51):
+    for epoch in range(1, num_epochs):
         model.train()
         avgLoss = 0
         for data in tqdm(train_loader, total=47):  # Iterate in batches over the training dataset.
@@ -476,7 +478,7 @@ def shapeggen_objective(trial):
     lr = trial.suggest_float('lrs', 1e-6, 0.1)
     alpha = trial.suggest_float('a', 0.1, 1)
     beta = trial.suggest_float('b', 0.1, 1)
-    explainer = BetaExplainer(model, x, edge_index, torch.device('cpu'), alpha, beta)
+    explainer = NodeBetaExplainer.BetaExplainer(model, x, edge_index, torch.device('cpu'), alpha, beta)
     explainer.train(5, lr)
     betaem = explainer.edge_mask()
     best_acc = 0
@@ -497,11 +499,11 @@ def sergio_objective(trial):
     lr = trial.suggest_float('lrs', 1e-6, 0.1)
     alpha = trial.suggest_float('a', 0.1, 1)
     beta = trial.suggest_float('b', 0.1, 1)
-    explainer = BetaExplainer(model, graph_data, edge_index, torch.device('cpu'), 2000, alpha, beta)
+    explainer = GraphBetaExplainer.BetaExplainer(model, graph_data, edge_index, torch.device('cpu'), 2000, alpha, beta)
     explainer.train(5, lr)
     prediction_mask = explainer.edge_mask()
     em = prediction_mask
-    acc, prec, rec, f1 = metrics(groundtruth_mask, prediction_mask, false_negative_base)
+    acc, prec, rec, f1 = sergio_metrics(groundtruth_mask, prediction_mask, false_negative_base)
     return acc
 
 gt = sys.argv[4]
@@ -549,7 +551,7 @@ def node_objective(trial):
     lr = trial.suggest_float('lrs', 1e-6, 0.1)
     alpha = trial.suggest_float('a', 0.1, 1)
     beta = trial.suggest_float('b', 0.1, 1)
-    explainer = BetaExplainer(model, x, edge_index, torch.device('cpu'), alpha, beta)
+    explainer = NodeBetaExplainer.BetaExplainer(model, x, edge_index, torch.device('cpu'), alpha, beta)
     explainer.train(5, lr)
     betaem = explainer.edge_mask()
     faith = faithfulness(model, x, edge_index, betaem)
@@ -564,7 +566,7 @@ def graph_objective(trial):
     lr = trial.suggest_float('lrs', 1e-6, 0.1)
     alpha = trial.suggest_float('a', 0.1, 1)
     beta = trial.suggest_float('b', 0.1, 1)
-    explainer = BetaExplainer(model, graph_data, edge_index, torch.device('cpu'), num_graphs, alpha, beta)
+    explainer = GraphBetaExplainer.BetaExplainer(model, graph_data, edge_index, torch.device('cpu'), num_graphs, alpha, beta)
     explainer.train(5, lr)
     betaem = explainer.edge_mask()
     faith = faithfulness(model, x, edge_index, betaem)
@@ -578,23 +580,23 @@ def graph_objective(trial):
 pruner = optuna.pruners.MedianPruner()
 study = optuna.create_study(direction='maximize', sampler=optuna.samplers.TPESampler(), pruner=pruner)
 if sys.argv[1] in shapeggen:
-    study.optimize(graph_objective, n_trials=5)
+    study.optimize(shapeggen_objective, n_trials=150)
 elif sys.argv[1] in sergio:
-    study.optimize(sergio_objective, n_trials=5)
+    study.optimize(sergio_objective, n_trials=150)
 else:
     if sys.argv[2] == 'node':
-        study.optimize(node_objective, n_trials=5)
+        study.optimize(node_objective, n_trials=150)
     else:
-        study.optimize(graph_objective, n_trials=5)
+        study.optimize(graph_objective, n_trials=150)
 print('Best hyperparameters:', study.best_params)
 print('Best Result:', study.best_value)
 
 lr = study.best_params['lrs']
-a = study.best_params['a']
-b = study.best_params['b']
+alpha = study.best_params['a']
+beta = study.best_params['b']
 
 if sys.argv[1] in shapeggen:
-    explainer = BetaExplainer(model, x, edge_index, torch.device('cpu'), alpha, beta)
+    explainer = NodeBetaExplainer.BetaExplainer(model, x, edge_index, torch.device('cpu'), alpha, beta)
     explainer.train(500, lr)
     betaem = explainer.edge_mask()
     best_acc = 0
@@ -613,7 +615,7 @@ if sys.argv[1] in shapeggen:
             best_faith = faithfulness(model, x, edge_index, exp)
     print(f'Best Accuracy: {best_acc:.4f}, Best Precision: {best_prec:.4f}, Best Recall: {best_rec:.4f}, Best F1 Score: {best_f1:.4f}., Best Unfaithfulness: {best_faith:.4f}')
 elif sys.argv[1] in sergio:
-    explainer = BetaExplainer(model, graph_data, edge_index, torch.device('cpu'), 2000, alpha, beta)
+    explainer = GraphBetaExplainer.BetaExplainer(model, graph_data, edge_index, torch.device('cpu'), 2000, alpha, beta)
     explainer.train(500, lr)
     prediction_mask = explainer.edge_mask()
     em = prediction_mask
@@ -622,9 +624,9 @@ elif sys.argv[1] in sergio:
     print(f'Accuracy: {acc:.4f}, Precision: {prec:.4f}, Recall: {rec:.4f}, F1 Score: {f1:.4f}, Unfaithfulness: {faith:.4f}')
 else:
     if sys.argv[2] == 'node':
-        explainer = BetaExplainer(model, x, edge_index, torch.device('cpu'), alpha, beta)
+        explainer = NodeBetaExplainer.BetaExplainer(model, x, edge_index, torch.device('cpu'), alpha, beta)
     else:
-        explainer = BetaExplainer(model, graph_data, edge_index, torch.device('cpu'), num_graphs, alpha, beta)
+        explainer = GraphBetaExplainer.BetaExplainer(model, graph_data, edge_index, torch.device('cpu'), num_graphs, alpha, beta)
     explainer.train(500, lr)
     betaem = explainer.edge_mask()
     faith = faithfulness(model, x, edge_index, betaem)
