@@ -1,0 +1,7 @@
+numpy==1.26.4
+optuna==4.2.0
+pandas==2.2.2
+pyro-ppl==1.9.1
+torch==2.7.0
+torch_geometric==2.6
+tqdm==4.66.5
