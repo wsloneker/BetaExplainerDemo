@@ -96,7 +96,7 @@ def sergio_metrics(gt_grn, prediction_mask, false_negative_base):
     tn = 0
     fn = false_negative_base
     fp = 0
-    for ct in range(0, sz):
+    for ct in range(0, gt_grn.shape[0]):
         if gt_grn[ct] == 1 and prediction_mask[ct] > 0.5:
             tp += 1
         elif gt_grn[ct] == 1 and prediction_mask[ct] <= 0.5:
@@ -183,7 +183,22 @@ else:
     if groundtruth:
         file_name = sys.argv[1]
         if file_name[-3:] == 'npy':
-            adj = np.load('GTEdgeIndex' + file_name, allow_pickle=True)
+            gt = np.load('GTEdgeIndex' + file_name, allow_pickle=True).astype(np.int64)
+            gt_set = set()
+            gt_exp = []
+            for i in range(0, gt.shape[1]):
+                p1 = gt[0, i]
+                p2 = gt[1, i]
+                gt_set.add((p1, p2))
+            ei = edge_index.numpy()
+            for i in range(0, edge_index.shape[1]):
+                p1 = ei[0, i]
+                p2 = ei[1, i]
+                if (p1, p2) in gt_set:
+                    gt_exp.append(1)
+                else:
+                    gt_exp.append(0)
+            gt_exp = torch.tensor(np.array(gt_exp))
         else:
             if file_name[-3:] == 'csv':
                 df_ei = pd.read_csv('GTEdgeIndex' + file_name)
@@ -191,9 +206,9 @@ else:
                 df_ei = pd.read_csv('GTEdgeIndex' + file_name, sep='\t')
             else:
                 df_ei = pd.read_excel('GTEdgeIndex' + file_name)
-        lst1 = list(df_gt['P1'])
-        lst2 = list(df_gt['P2'])
-        gt_exp = torch.tensor(np.array([lst1, lst2]).astype(np.int64))
+            lst1 = list(df_gt['P1'])
+            lst2 = list(df_gt['P2'])
+            gt_exp = torch.tensor(np.array([lst1, lst2]).astype(np.int64))
     if sys.argv[2] == 'node':
         x = torch.tensor(features)
         y = torch.tensor(labels)
@@ -336,7 +351,7 @@ def model_objective(trial):
     criterion = torch.nn.CrossEntropyLoss()
     model = GCN(input_features, hcs, num_classes, layers, conv_type, heads)
     optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=wd)
-    num_epochs = 15
+    num_epochs = 5
     if sys.argv[2] == 'node':
         y_true = y.numpy()
         for epoch in range(1, num_epochs + 1):
@@ -391,7 +406,7 @@ def model_objective(trial):
     return test_acc
 pruner = optuna.pruners.MedianPruner()
 study = optuna.create_study(direction='maximize', sampler=optuna.samplers.TPESampler(), pruner=pruner)
-study.optimize(model_objective, n_trials=1)
+study.optimize(model_objective, n_trials=150)
 if sys.argv[1] in shapeggen:
     num_epochs = 2000
 else:
@@ -422,7 +437,7 @@ if sys.argv[2] == 'node':
         train_acc, train_prec, train_rec, train_f1 = evaluate(y_pred[train_mask], y_true[train_mask])
         test_acc, test_prec, test_rec, test_f1  = evaluate(y_pred[test_mask], y_true[test_mask])
         val_acc, val_prec, val_rec, val_f1  = evaluate(y_pred[val_mask], y_true[val_mask])
-        print(f'Epoch: {epoch:03d}, Train Acc: {train_acc:.4f}, Test Acc: {test_acc:.4f}, Val Acc: {val_acc:.4f}, Loss: {loss:.4f}')
+        print(f'Epoch: {epoch:03d}, Train Acc: {train_acc}, Test Acc: {test_acc}, Val Acc: {val_acc}, Loss: {loss}')
 else:
     for epoch in range(1, num_epochs):
         model.train()
@@ -457,7 +472,7 @@ else:
             pred = out.argmax(dim=1)  # Use the class with highest probability.
             correct += int((pred == data.y).sum())  # Check against ground-truth labels.
         test_acc = correct / len(test_loader.dataset)
-        print(f'Epoch: {epoch:03d}, Train Acc: {train_acc:.4f}, Test Acc: {test_acc:.4f}, Loss: {loss:.4f}')
+        print(f'Epoch: {epoch:03d}, Train Acc: {train_acc}, Test Acc: {test_acc}, Loss: {loss}')
 
 def faithfulness(model, X, G, edge_mask):
     org_vec = model(X, G)
@@ -467,6 +482,35 @@ def faithfulness(model, X, G, edge_mask):
             lst.append(i)
     g = G[:, lst]
     pert_vec = model(X, g)
+    org_softmax = F.softmax(org_vec, dim=-1)
+    pert_softmax = F.softmax(pert_vec, dim=-1)
+    res = 1 - torch.exp(-F.kl_div(org_softmax.log(), pert_softmax, None, None, 'sum')).item()
+    return res
+
+def graph_faithfulness(model, X, G, edge_mask):
+    org_vec = []
+    for data in X:
+        data.x = torch.reshape(data.x, (data.x.shape[0], 1))
+        data.x = data.x.type(torch.FloatTensor)
+        data = data.to(device)
+        org_vec1 = model(data.x, G, data.batch).tolist()
+        org_vec.append(org_vec1)
+    org_vec = torch.tensor(org_vec)
+    lst = []
+    for i in range(0, edge_mask.shape[0]):
+        if edge_mask[i] >= 0.5:
+            lst.append(i)
+    g = G[:, lst]
+    
+    pert_vec = []
+    for data in X:
+        data.x = torch.reshape(data.x, (data.x.shape[0], 1))
+        data.x = data.x.type(torch.FloatTensor)
+        data = data.to(device)
+        pert_vec1 = model(data.x, g, data.batch).tolist()
+        pert_vec.append(pert_vec1)
+    pert_vec = torch.tensor(pert_vec)
+    
     org_softmax = F.softmax(org_vec, dim=-1)
     pert_softmax = F.softmax(pert_vec, dim=-1)
     res = 1 - torch.exp(-F.kl_div(org_softmax.log(), pert_softmax, None, None, 'sum')).item()
@@ -503,7 +547,7 @@ def sergio_objective(trial):
     explainer.train(5, lr)
     prediction_mask = explainer.edge_mask()
     em = prediction_mask
-    acc, prec, rec, f1 = sergio_metrics(groundtruth_mask, prediction_mask, false_negative_base)
+    acc, prec, rec, f1 = sergio_metrics(gt_grn, prediction_mask, false_negative_base)
     return acc
 
 gt = sys.argv[4]
@@ -532,12 +576,12 @@ def exp_acc(gt_exp, betaem):
                 tn += 1
     acc = (tp + tn) / (tp + tn + fp + fn)
     denom = tp + fp
-    if denom > 0:
+    if denom != 0:
         prec = tp / denom
     else:
         prec = 0
     denom = tp + fn
-    if denom > 0:
+    if denom != 0:
         rec = tp / denom
     else:
         rec = 0
@@ -569,7 +613,7 @@ def graph_objective(trial):
     explainer = GraphBetaExplainer.BetaExplainer(model, graph_data, edge_index, torch.device('cpu'), num_graphs, alpha, beta)
     explainer.train(5, lr)
     betaem = explainer.edge_mask()
-    faith = faithfulness(model, x, edge_index, betaem)
+    faith = graph_faithfulness(model, graph_data, edge_index, betaem)
     res = 1 - faith
     if groundtruth:
         accuracy, prec, rec, f1 = exp_acc(gt_exp, betaem)
@@ -594,10 +638,10 @@ print('Best Result:', study.best_value)
 lr = study.best_params['lrs']
 alpha = study.best_params['a']
 beta = study.best_params['b']
-
+ep = 500
 if sys.argv[1] in shapeggen:
     explainer = NodeBetaExplainer.BetaExplainer(model, x, edge_index, torch.device('cpu'), alpha, beta)
-    explainer.train(500, lr)
+    explainer.train(ep, lr)
     betaem = explainer.edge_mask()
     best_acc = 0
     for i in range(0, len(gt_exp)):
@@ -613,25 +657,28 @@ if sys.argv[1] in shapeggen:
             best_prec = prec
             best_rec = rec
             best_faith = faithfulness(model, x, edge_index, exp)
-    print(f'Best Accuracy: {best_acc:.4f}, Best Precision: {best_prec:.4f}, Best Recall: {best_rec:.4f}, Best F1 Score: {best_f1:.4f}., Best Unfaithfulness: {best_faith:.4f}')
+    print(f'Best Accuracy: {best_acc}, Best Precision: {best_prec}, Best Recall: {best_rec}, Best F1 Score: {best_f1}., Best Unfaithfulness: {best_faith}')
 elif sys.argv[1] in sergio:
     explainer = GraphBetaExplainer.BetaExplainer(model, graph_data, edge_index, torch.device('cpu'), 2000, alpha, beta)
-    explainer.train(500, lr)
+    explainer.train(ep, lr)
     prediction_mask = explainer.edge_mask()
     em = prediction_mask
     acc, prec, rec, f1 = sergio_metrics(gt_grn, prediction_mask, false_negative_base)
-    faith = faithfulness(model, x, edge_index, em)
-    print(f'Accuracy: {acc:.4f}, Precision: {prec:.4f}, Recall: {rec:.4f}, F1 Score: {f1:.4f}, Unfaithfulness: {faith:.4f}')
+    faith = graph_faithfulness(model, graph_data, edge_index, edge_mask)
+    print(f'Accuracy: {acc}, Precision: {prec}, Recall: {rec}, F1 Score: {f1}, Unfaithfulness: {faith}')
 else:
     if sys.argv[2] == 'node':
         explainer = NodeBetaExplainer.BetaExplainer(model, x, edge_index, torch.device('cpu'), alpha, beta)
+        explainer.train(ep, lr)
+        betaem = explainer.edge_mask()
+        faith = faithfulness(model, x, edge_index, betaem)
     else:
         explainer = GraphBetaExplainer.BetaExplainer(model, graph_data, edge_index, torch.device('cpu'), num_graphs, alpha, beta)
-    explainer.train(500, lr)
-    betaem = explainer.edge_mask()
-    faith = faithfulness(model, x, edge_index, betaem)
+        explainer.train(ep, lr)
+        betaem = explainer.edge_mask()
+        faith = graph_faithfulness(model, graph_data, edge_index, betaem)
     if groundtruth:
         accuracy, prec, rec, f1 = exp_acc(gt_exp, betaem)
-        print(f'Accuracy: {acc:.4f}, Precision: {prec:.4f}, Recall: {rec:.4f}, F1 Score: {f1:.4f}, Unfaithfulness: {faith:.4f}')
+        print(f'Accuracy: {accuracy}, Precision: {prec}, Recall: {rec}, F1 Score: {f1}, Unfaithfulness: {faith}')
     else:
-        print(f'Unfaithfulness: {faith:.4f}')
+        print(f'Unfaithfulness: {faith}')
