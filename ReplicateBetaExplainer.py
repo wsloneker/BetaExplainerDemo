@@ -101,7 +101,7 @@ if sys.argv[1] in shapeggen:
     x, y, edge_index, gt_exp, train_mask, test_mask, val_mask = return_ShapeGGen_dataset(sys.argv[1])
     num_classes = np.unique(y.numpy()).shape[0]
     num_hops = 3
-else:
+elif sys.argv[1] in sergio:
     adj, features, labels, num_features, num_classes, gt_grn, false_negative_base = get_sergio_data(sys.argv[1])
     edge_index = torch.tensor(adj, dtype=torch.int64)
     features = features.astype(np.float32)
@@ -139,6 +139,54 @@ else:
     y = torch.tensor(labels)
     train_loader = DataLoader(train_dataset, batch_size=1, shuffle=True)
     test_loader = DataLoader(test_dataset, batch_size=1, shuffle=False)
+else:
+    from torch_geometric.datasets import WebKB
+    dataset = WebKB(root=f'/tmp/{sys.argv[1]}', name=sys.argv[1])
+    data = dataset[0]
+    x = data.x
+    y = data.y
+    edge_index = data.edge_index
+    num_features = x.shape[1]
+    num_classes = np.unique(y.numpy()).shape[0]
+    num = y.shape[0]
+    shuffle_index = []
+    for i in range(0, num):
+        shuffle_index.append(i)
+    shuffle_index = np.array(random.sample(shuffle_index, num))
+    shuffle_index = shuffle_index.astype(np.int32)
+    train_mask = []
+    train_idx = []
+    test_mask = []
+    test_idx = []
+    val_mask = []
+    val_idx = []
+    num_train = int(len(shuffle_index)* 0.6)
+    num_test = int(len(shuffle_index)*0.2)
+    for j in range(0, num):
+        i = shuffle_index[j]
+        if j < num_train:
+            train_idx.append(i)
+        else:
+            if j < num_train + num_test:
+                test_idx.append(i)
+            else:
+                val_idx.append(i)
+    for j in range(0, num):
+        if j in train_idx:
+            train_mask.append(True)
+            test_mask.append(False)
+            val_mask.append(False)
+        elif j in test_idx:
+            train_mask.append(False)
+            test_mask.append(True)
+            val_mask.append(False)
+        else:
+            train_mask.append(False)
+            test_mask.append(False)
+            val_mask.append(True)
+    train_mask = torch.tensor(train_mask)
+    test_mask = torch.tensor(test_mask)
+    val_mask = torch.tensor(val_mask)
 if sys.argv[1] in 'sergio':
     input_features = 1
 else:
@@ -192,15 +240,21 @@ if sys.argv[1] in shapeggen:
         lr = 0.05
         wd = 0.001
     model = xAIGCN(16, input_features, num_classes)
-else:
+elif sys.argv[1] in sergio:
     set_seed(200)
     num_epochs = 50
     lr = 0.001
     wd = 0
     model = SERGIOGCN(num_classes)
+else:
+    set_seed(0)
+    lr = 0.03076
+    wd = 0.2682
+    num_epochs = 250
+    model = xAIGCN(1703, input_features, num_classes)
 print(model)
 optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=wd)
-if sys.argv[1] in shapeggen:
+if sys.argv[1] in shapeggen or sys.argv[1] == 'Texas':
     y_true = y.numpy()
     for epoch in range(1, num_epochs):
         model.train()
@@ -304,7 +358,7 @@ if sys.argv[1] in sergio:
         lr = 0.01
         alpha = 0.05
         beta = 0.95
-else:
+elif sys.argv[1] in shapeggen:
     if sys.argv[1] == 'base':
         lr = 0.05
         alpha = 0.8
@@ -329,7 +383,11 @@ else:
         lr = 0.05
         alpha = 0.8
         beta = 0.6
-ep = 500
+else:
+    lr = 0.02649
+    alpha = 1.76
+    beta = 1.866
+ep = 25
 results = []
 for run in range(0, 10):
     seed = np.random.randint(0, 1000001)
@@ -354,7 +412,7 @@ for run in range(0, 10):
                 best_faith = faithfulness(model, x, edge_index, exp)
         print(f'Best Accuracy: {best_acc}, Best Precision: {best_prec}, Best Recall: {best_rec}, Best F1 Score: {best_f1}., Best Unfaithfulness: {best_faith}')
         out = [seed, best_acc, best_f1, best_prec, best_rec, best_faith]
-    else:
+    elif sys.argv[1] in sergio:
         explainer = GraphBetaExplainer.BetaExplainer(model, graph_data, edge_index, torch.device('cpu'), 2000, alpha, beta)
         explainer.train(ep, lr)
         prediction_mask = explainer.edge_mask()
@@ -363,13 +421,19 @@ for run in range(0, 10):
         faith = graph_faithfulness(model, graph_data, edge_index, edge_mask)
         print(f'Accuracy: {acc}, Precision: {prec}, Recall: {rec}, F1 Score: {f1}, Unfaithfulness: {faith}')
         out = [seed, acc, prec, rec, f1, faith]
-
-cols = ['Seed', 'Accuracy', 'Precision', 'Recall', 'F1 Score', 'Unfaithfulness']
-df = pd.DataFrame(results, columns=cols)
-if sys.argv[1] in sergio or sys.argv[1] in shapeggen:
-    fn = sys.argv[1]
+    else:
+        explainer = NodeBetaExplainer.BetaExplainer(model, x, edge_index, torch.device('cpu'), alpha, beta)
+        explainer.train(ep, lr)
+        betaem = explainer.edge_mask()
+        faith = faithfulness(model, x, edge_index, beatem)
+        out = [seed, faith]
+    res.append(out)
+if len(out) > 2:
+    cols = ['Seed', 'Accuracy', 'Precision', 'Recall', 'F1 Score', 'Unfaithfulness']
 else:
-    fn = sys.argv[1][0:-4]
+    cols = ['Seed', 'Unfaithfulness']
+df = pd.DataFrame(results, columns=cols)
+fn = sys.argv[1]
 df.to_csv(f'SeedResults{fn}.csv')
 if 'Accuracy' in columns:
     acc = np.mean(list(df['Accuracy']))
