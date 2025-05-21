@@ -1,4 +1,4 @@
-from ShapeGGenSimulator import ShapeGGen, return_ShapeGGen_dataset, graph_exp_acc
+from ShapeGGenSimulator import ShapeGGen, return_ShapeGGen_dataset, graph_exp_acc, set_seed
 from torch_geometric.nn import GCNConv, SAGEConv, GATConv, GATv2Conv, Linear, global_mean_pool, global_max_pool
 import numpy as np
 import pandas as pd
@@ -639,46 +639,76 @@ lr = study.best_params['lrs']
 alpha = study.best_params['a']
 beta = study.best_params['b']
 ep = 500
-if sys.argv[1] in shapeggen:
-    explainer = NodeBetaExplainer.BetaExplainer(model, x, edge_index, torch.device('cpu'), alpha, beta)
-    explainer.train(ep, lr)
-    betaem = explainer.edge_mask()
-    best_acc = 0
-    for i in range(0, len(gt_exp)):
-        subset, sub_edge_index, mapping, hard_edge_mask = \
-            k_hop_subgraph(i, num_hops, edge_index,
-                          relabel_nodes=False)
-        ei = edge_index[:,hard_edge_mask]
-        exp = betaem[hard_edge_mask]
-        accuracy, prec, rec, f1 = graph_exp_acc(gt_exp[i], exp, node_thresh_factor = 0.5)
-        if accuracy >= best_acc:
-            best_acc = accuracy
-            best_f1 = f1
-            best_prec = prec
-            best_rec = rec
-            best_faith = faithfulness(model, x, edge_index, exp)
-    print(f'Best Accuracy: {best_acc}, Best Precision: {best_prec}, Best Recall: {best_rec}, Best F1 Score: {best_f1}., Best Unfaithfulness: {best_faith}')
-elif sys.argv[1] in sergio:
-    explainer = GraphBetaExplainer.BetaExplainer(model, graph_data, edge_index, torch.device('cpu'), 2000, alpha, beta)
-    explainer.train(ep, lr)
-    prediction_mask = explainer.edge_mask()
-    em = prediction_mask
-    acc, prec, rec, f1 = sergio_metrics(gt_grn, prediction_mask, false_negative_base)
-    faith = graph_faithfulness(model, graph_data, edge_index, edge_mask)
-    print(f'Accuracy: {acc}, Precision: {prec}, Recall: {rec}, F1 Score: {f1}, Unfaithfulness: {faith}')
-else:
-    if sys.argv[2] == 'node':
+results = []
+for run in range(0, 10):
+    seed = np.random.randint(0, 1000001)
+    set_seed(int(seed))
+    if sys.argv[1] in shapeggen:
         explainer = NodeBetaExplainer.BetaExplainer(model, x, edge_index, torch.device('cpu'), alpha, beta)
         explainer.train(ep, lr)
         betaem = explainer.edge_mask()
-        faith = faithfulness(model, x, edge_index, betaem)
-    else:
-        explainer = GraphBetaExplainer.BetaExplainer(model, graph_data, edge_index, torch.device('cpu'), num_graphs, alpha, beta)
+        best_acc = 0
+        for i in range(0, len(gt_exp)):
+            subset, sub_edge_index, mapping, hard_edge_mask = \
+                k_hop_subgraph(i, num_hops, edge_index,
+                              relabel_nodes=False)
+            ei = edge_index[:,hard_edge_mask]
+            exp = betaem[hard_edge_mask]
+            accuracy, prec, rec, f1 = graph_exp_acc(gt_exp[i], exp, node_thresh_factor = 0.5)
+            if accuracy >= best_acc:
+                best_acc = accuracy
+                best_f1 = f1
+                best_prec = prec
+                best_rec = rec
+                best_faith = faithfulness(model, x, edge_index, exp)
+        print(f'Best Accuracy: {best_acc}, Best Precision: {best_prec}, Best Recall: {best_rec}, Best F1 Score: {best_f1}., Best Unfaithfulness: {best_faith}')
+        out = [seed, best_acc, best_f1, best_prec, best_rec, best_faith]
+    elif sys.argv[1] in sergio:
+        explainer = GraphBetaExplainer.BetaExplainer(model, graph_data, edge_index, torch.device('cpu'), 2000, alpha, beta)
         explainer.train(ep, lr)
-        betaem = explainer.edge_mask()
-        faith = graph_faithfulness(model, graph_data, edge_index, betaem)
-    if groundtruth:
-        accuracy, prec, rec, f1 = exp_acc(gt_exp, betaem)
-        print(f'Accuracy: {accuracy}, Precision: {prec}, Recall: {rec}, F1 Score: {f1}, Unfaithfulness: {faith}')
+        prediction_mask = explainer.edge_mask()
+        em = prediction_mask
+        acc, prec, rec, f1 = sergio_metrics(gt_grn, prediction_mask, false_negative_base)
+        faith = graph_faithfulness(model, graph_data, edge_index, edge_mask)
+        print(f'Accuracy: {acc}, Precision: {prec}, Recall: {rec}, F1 Score: {f1}, Unfaithfulness: {faith}')
+        out = [seed, acc, prec, rec, f1, faith]
     else:
-        print(f'Unfaithfulness: {faith}')
+        if sys.argv[2] == 'node':
+            explainer = NodeBetaExplainer.BetaExplainer(model, x, edge_index, torch.device('cpu'), alpha, beta)
+            explainer.train(ep, lr)
+            betaem = explainer.edge_mask()
+            faith = faithfulness(model, x, edge_index, betaem)
+        else:
+            explainer = GraphBetaExplainer.BetaExplainer(model, graph_data, edge_index, torch.device('cpu'), num_graphs, alpha, beta)
+            explainer.train(ep, lr)
+            betaem = explainer.edge_mask()
+            faith = graph_faithfulness(model, graph_data, edge_index, betaem)
+        if groundtruth:
+            accuracy, prec, rec, f1 = exp_acc(gt_exp, betaem)
+            print(f'Accuracy: {accuracy}, Precision: {prec}, Recall: {rec}, F1 Score: {f1}, Unfaithfulness: {faith}')
+            out = [seed, accuracy, prec, rec, f1, faith]
+        else:
+            print(f'Unfaithfulness: {faith}')
+            out = [seed, faith]
+    results.append(out)
+
+if len(out) > 2:
+    cols = ['Seed', 'Accuracy', 'Precision', 'Recall', 'F1 Score', 'Unfaithfulness']
+else:
+    cols = ['Seed', 'Unfaithfulness']
+df = pd.DataFrame(results, columns=cols)
+if sys.argv[1] in sergio or sys.argv[1] in shapeggen:
+    fn = sys.argv[1]
+else:
+    fn = sys.argv[1][0:-4]
+df.to_csv(f'SeedResults{fn}.csv')
+if 'Accuracy' in columns:
+    acc = np.mean(list(df['Accuracy']))
+    prec = np.mean(list(df['Precision']))
+    rec = np.mean(list(df['Recall']))
+    f1 = np.mean(list(df['F1 Score']))
+    unfaith = np.mean(list(df['Unfaithfulness']))
+    print(f'Average Accuracy: {acc}, Average Precision: {prec}, Average Recall: {rec}, Average F1 Score: {f1}, Average Unfaithfulness: {unfaith}')
+else:
+    unfaith = np.mean(list(df['Unfaithfulness']))
+    print(f'Average Unfaithfulness: {unfaith}')
