@@ -15,7 +15,7 @@ from tqdm import tqdm
 from sklearn.metrics import mean_squared_error, precision_score, recall_score, f1_score, accuracy_score
 from torch_geometric.utils import k_hop_subgraph, to_undirected
 # Takes 4 arguments
-# Argument 1: Denotes data type; specify 25 or 50 for the 25% and 50% sparse SERGIO datasets; base, hetero, unfair, lessinform, or more inform for ShapeGGen Simulator datasets; specify file name for other files (assumed to be of format labels = f"Labels{file_name}', features = f"Features{file_name}', edge_index = f"EdgeIndex{file_name}' where file_name includes the file type (of csv, npy, tsv, or xlsx) consistant across all types, features is node/graph by number of features, labels if in a csv/tsv/excel is in column "Labels", and edge indices in a csv/tsv/excel is assumed to be in columns "P1" and "P2" denoting connectivity)
+# Argument 1: Denotes data type; specify 25 or 50 for the 25% and 50% sparse SERGIO datasets; base, hetero, unfair, lessinform, or moreinform for ShapeGGen Simulator datasets; specify file name for other files (assumed to be of format labels = f"Labels{file_name}', features = f"Features{file_name}', edge_index = f"EdgeIndex{file_name}' where file_name includes the file type (of csv, npy, tsv, or xlsx) consistant across all types, features is node/graph by number of features, labels if in a csv/tsv/excel is in column "Labels", and edge indices in a csv/tsv/excel is assumed to be in columns "P1" and "P2" denoting connectivity)
 # Argument 2: denotes classification problem type; important for specified files
 # Argument 3: denotes convolutional layer types chosen for model --> best parameters learned in this file
 # Argument 4: denotes whether dataset has known groundtruth
@@ -338,6 +338,7 @@ class GCN(torch.nn.Module):
             x = global_max_pool(x, batch)
         return x
 y_true = y.numpy()
+criterion = torch.nn.CrossEntropyLoss()
 def model_objective(trial):
     lr = trial.suggest_float('lrs', 1e-6, 0.2)
     wd = trial.suggest_float('wds', 0, 1)
@@ -348,7 +349,6 @@ def model_objective(trial):
     else:
         upper = 1
     heads = trial.suggest_int('heads', 0, upper)
-    criterion = torch.nn.CrossEntropyLoss()
     model = GCN(input_features, hcs, num_classes, layers, conv_type, heads)
     optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=wd)
     num_epochs = 5
