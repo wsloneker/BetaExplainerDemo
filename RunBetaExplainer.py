@@ -406,9 +406,11 @@ def model_objective(trial):
     return test_acc
 pruner = optuna.pruners.MedianPruner()
 study = optuna.create_study(direction='maximize', sampler=optuna.samplers.TPESampler(), pruner=pruner)
-study.optimize(model_objective, n_trials=150)
+study.optimize(model_objective, n_trials=500)
 if sys.argv[1] in shapeggen:
     num_epochs = 2000
+elif sys.argv[1] in sergio:
+    num_epochs = 50
 else:
     num_epochs = 250
 print('Best hyperparameters:', study.best_params)
@@ -624,14 +626,14 @@ def graph_objective(trial):
 pruner = optuna.pruners.MedianPruner()
 study = optuna.create_study(direction='maximize', sampler=optuna.samplers.TPESampler(), pruner=pruner)
 if sys.argv[1] in shapeggen:
-    study.optimize(shapeggen_objective, n_trials=150)
+    study.optimize(shapeggen_objective, n_trials=500)
 elif sys.argv[1] in sergio:
-    study.optimize(sergio_objective, n_trials=150)
+    study.optimize(sergio_objective, n_trials=500)
 else:
     if sys.argv[2] == 'node':
-        study.optimize(node_objective, n_trials=150)
+        study.optimize(node_objective, n_trials=500)
     else:
-        study.optimize(graph_objective, n_trials=150)
+        study.optimize(graph_objective, n_trials=500)
 print('Best hyperparameters:', study.best_params)
 print('Best Result:', study.best_value)
 
