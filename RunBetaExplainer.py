@@ -594,9 +594,9 @@ def exp_acc(gt_exp, betaem):
     return acc, prec, rec, f1
 
 def node_objective(trial):
-    lr = trial.suggest_float('lrs', 1e-6, 0.1)
-    alpha = trial.suggest_float('a', 0.1, 1)
-    beta = trial.suggest_float('b', 0.1, 1)
+    lr = trial.suggest_float('lrs', 1e-6, 0.05)
+    alpha = trial.suggest_float('a', 0.1, 5)
+    beta = trial.suggest_float('b', 0.1, 5)
     explainer = NodeBetaExplainer.BetaExplainer(model, x, edge_index, torch.device('cpu'), alpha, beta)
     explainer.train(5, lr)
     betaem = explainer.edge_mask()
@@ -609,9 +609,9 @@ def node_objective(trial):
     return res
 
 def graph_objective(trial):
-    lr = trial.suggest_float('lrs', 1e-6, 0.1)
-    alpha = trial.suggest_float('a', 0.1, 1)
-    beta = trial.suggest_float('b', 0.1, 1)
+    lr = trial.suggest_float('lrs', 1e-6, 0.05)
+    alpha = trial.suggest_float('a', 0.1, 5)
+    beta = trial.suggest_float('b', 0.1, 5)
     explainer = GraphBetaExplainer.BetaExplainer(model, graph_data, edge_index, torch.device('cpu'), num_graphs, alpha, beta)
     explainer.train(5, lr)
     betaem = explainer.edge_mask()
