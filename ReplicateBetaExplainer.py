@@ -66,26 +66,28 @@ def sergio_metrics(gt_grn, prediction_mask, false_negative_base):
     tn = 0
     fn = false_negative_base
     fp = 0
+    gt_grn = gt_grn.numpy()
+    prediction_mask = prediction_mask.numpy()
     for ct in range(0, gt_grn.shape[0]):
-        if gt_grn[ct] == 1 and prediction_mask[ct] > 0.5:
-            tp += 1
-        elif gt_grn[ct] == 1 and prediction_mask[ct] <= 0.5:
-            fn += 1
-        elif gt_grn[ct] == 0 and prediction_mask[ct] <= 0.5:
-            tn += 1
-        elif gt_grn[ct] == 0 and prediction_mask[ct] > 0.5:
-            fp += 1
+        if gt_grn[ct] == 1:
+            if prediction_mask[ct] > 0.5:
+                tp += 1
+            else:
+                fn += 1
         else:
-            continue
+            if prediction_mask[ct] <= 0.5:
+                tn += 1
+            else:
+                fp += 1
     acc = (tp + tn) / (tp + tn + fn + fp)
-    if tp + fp != 0:
-        prec = tp / (tp + fp)
-    else:
+    if tp + fp == 0:
         prec = 0
-    if tp + fp != 0:
-        rec = tp / (tp + fn)
     else:
+        prec = tp / (tp + fp)
+    if tp + fp == 0:
         rec = 0
+    else:
+        rec = tp / (tp + fn)
     if prec != 0 and rec != 0:
         f1 = (2 * prec * rec) / (prec + rec)
     else:
@@ -247,16 +249,16 @@ elif sys.argv[1] in sergio:
     wd = 0
     model = SERGIOGCN(num_classes)
 else:
-    set_seed(0)
     lr = 0.03076
     wd = 0.2682
     num_epochs = 250
+    set_seed(0)
     model = xAIGCN(1703, input_features, num_classes)
 print(model)
 optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=wd)
 if sys.argv[1] in shapeggen or sys.argv[1] == 'Texas':
     y_true = y.numpy()
-    for epoch in range(1, num_epochs):
+    for epoch in range(1, num_epochs + 1):
         model.train()
         optimizer.zero_grad()
         out = model(x, edge_index)
@@ -271,7 +273,7 @@ if sys.argv[1] in shapeggen or sys.argv[1] == 'Texas':
         val_acc, val_prec, val_rec, val_f1  = evaluate(y_pred[val_mask], y_true[val_mask])
         print(f'Epoch: {epoch:03d}, Train Acc: {train_acc}, Test Acc: {test_acc}, Val Acc: {val_acc}, Loss: {loss}')
 else:
-    for epoch in range(1, num_epochs):
+    for epoch in range(1, num_epochs + 1):
         model.train()
         avgLoss = 0
         for data in tqdm(train_loader, total=47):  # Iterate in batches over the training dataset.
@@ -389,6 +391,7 @@ else:
     beta = 1.866
 ep = 25
 results = []
+graphs = []
 for run in range(0, 10):
     seed = np.random.randint(0, 1000001)
     set_seed(int(seed))
@@ -410,32 +413,57 @@ for run in range(0, 10):
                 best_prec = prec
                 best_rec = rec
                 best_faith = faithfulness(model, x, edge_index, exp)
+                best_exp = exp.numpy()
+                best_ei = ei.numpy()
+                best_gt = gt_exp[i].edge_imp.numpy()
         print(f'Best Accuracy: {best_acc}, Best Precision: {best_prec}, Best Recall: {best_rec}, Best F1 Score: {best_f1}., Best Unfaithfulness: {best_faith}')
         out = [seed, best_acc, best_f1, best_prec, best_rec, best_faith]
+        for i in range(0, best_exp.shape[0]):
+            graphs.append([seed, best_exp[i], best_ei[0, i], best_ei[1, i], best_gt[i]])
     elif sys.argv[1] in sergio:
         explainer = GraphBetaExplainer.BetaExplainer(model, graph_data, edge_index, torch.device('cpu'), 2000, alpha, beta)
         explainer.train(ep, lr)
         prediction_mask = explainer.edge_mask()
         em = prediction_mask
         acc, prec, rec, f1 = sergio_metrics(gt_grn, prediction_mask, false_negative_base)
-        faith = graph_faithfulness(model, graph_data, edge_index, edge_mask)
+        faith = graph_faithfulness(model, graph_data, edge_index, em)
         print(f'Accuracy: {acc}, Precision: {prec}, Recall: {rec}, F1 Score: {f1}, Unfaithfulness: {faith}')
         out = [seed, acc, prec, rec, f1, faith]
+        em = em.numpy()
+        ei = edge_index.numpy()
+        gt = gt_grn.numpy()
+        for i in range(0, em.shape[0]):
+            graphs.append([seed, em[i], ei[0, i], ei[1, i], gt[i]])
     else:
         explainer = NodeBetaExplainer.BetaExplainer(model, x, edge_index, torch.device('cpu'), alpha, beta)
         explainer.train(ep, lr)
         betaem = explainer.edge_mask()
-        faith = faithfulness(model, x, edge_index, beatem)
-        out = [seed, faith]
-    res.append(out)
-if len(out) > 2:
+        faith = faithfulness(model, x, edge_index, betaem)
+        em = betaem.numpy()
+        sparse = 0
+        for i in range(0, em.shape[0]):
+            if em[i] >= 0.5:
+                sparse += 1
+        sparse /= em.shape[0]
+        out = [seed, faith, sparse]
+        print(f'Faithfulness: {faith}, Sparsity: {sparse}')
+        ei = edge_index.numpy()
+        for i in range(0, em.shape[0]):
+            graphs.append([seed, em[i], ei[0, i], ei[1, i]])
+    results.append(out)
+if len(out) > 3:
     cols = ['Seed', 'Accuracy', 'Precision', 'Recall', 'F1 Score', 'Unfaithfulness']
+    cols1 = ['Seed', 'Probability', 'P1', 'P2', 'Groundtruth']
 else:
-    cols = ['Seed', 'Unfaithfulness']
+    cols = ['Seed', 'Unfaithfulness', 'Kept Edges']
+    cols1 = ['Seed', 'Probability', 'P1', 'P2']
 df = pd.DataFrame(results, columns=cols)
 fn = sys.argv[1]
 df.to_csv(f'SeedResults{fn}.csv')
-if 'Accuracy' in columns:
+df1 = pd.DataFrame(graphs, columns=cols1)
+fn = sys.argv[1]
+df1.to_csv(f'SeedGraphResults{fn}.csv')
+if 'Accuracy' in cols:
     acc = np.mean(list(df['Accuracy']))
     prec = np.mean(list(df['Precision']))
     rec = np.mean(list(df['Recall']))
@@ -444,4 +472,5 @@ if 'Accuracy' in columns:
     print(f'Average Accuracy: {acc}, Average Precision: {prec}, Average Recall: {rec}, Average F1 Score: {f1}, Average Unfaithfulness: {unfaith}')
 else:
     unfaith = np.mean(list(df['Unfaithfulness']))
-    print(f'Average Unfaithfulness: {unfaith}')
+    sparse = np.mean(list(df['Kept Edges']))
+    print(f'Average Unfaithfulness: {unfaith}, Average Sparsity: {sparse}')
