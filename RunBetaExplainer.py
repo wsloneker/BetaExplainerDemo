@@ -784,7 +784,7 @@ if len(out) > 3:
 else:
     cols = ['Seed', 'Unfaithfulness', 'Kept Edges']
 df = pd.DataFrame(results, columns=cols)
-if sys.argv[1] in sergio or sys.argv[1] in shapeggen:
+if sys.argv[1] in sergio or sys.argv[1] in shapeggen or sys.argv[1] == 'Texas':
     fn = sys.argv[1]
 else:
     fn = sys.argv[1][0:-4]
