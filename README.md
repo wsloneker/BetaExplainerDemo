@@ -24,39 +24,39 @@ To test the SERGIO datasets, use the following functions
 
 SERGIO 25% Sparsity
 
-python RunBetaExplainer.py 25 graph (Layer) True 
+python RunBetaExplainer.py 25 graph (layer) True (FinalLinearLayer)
 
 SERGIO 50% Sparsity
 
-python RunBetaExplainer.py 50 graph (layer) True
+python RunBetaExplainer.py 50 graph (layer) True (FinalLinearLayer)
 
-These functions indicate the dataset, that graph classification is included, and that there's a notion of groundtruth. Replace the layer term with GCN, SAGE, GAT, or GATv2 to denote the respective convolutional layer of the model used. The script will determine ideal parameters for this model, as well as the BetaExplainer using Optuna.
+These functions indicate the dataset, that graph classification is included, and that there's a notion of groundtruth. Replace the layer term with GCN, SAGE, GAT, or GATv2 to denote the respective convolutional layer of the model used. The script will determine ideal parameters for this model, as well as the BetaExplainer using Optuna. The (FinalLinearLayer) term denotes whether there will be a final linear term in the model or not using either True or False as a term.
 
 For the ShapeGGen datasets, a similar method is used, with layers updatable as desired by the user, dataset modified to accurately select the dataset, and the classification problem type updated to node.
 
 SG-BASE
 
-python RunBetaExplainer.py base node (layer) True 
+python RunBetaExplainer.py base node (layer) True (FinalLinearLayer)
 
 SG-UNFAIR
 
-python RunBetaExplainer.py unfair node (layer) True 
+python RunBetaExplainer.py unfair node (layer) True (FinalLinearLayer)
 
 SG-HETEROPHILIC
 
-python RunBetaExplainer.py hetero node (layer) True 
+python RunBetaExplainer.py hetero node (layer) True (FinalLinearLayer)
 
 SG-LESSINFORM
 
-python RunBetaExplainer.py lessinform node (layer) True 
+python RunBetaExplainer.py lessinform node (layer) True (FinalLinearLayer)
 
 SG-MOREINFORM
 
-python RunBetaExplainer.py moreinform node (layer) True 
+python RunBetaExplainer.py moreinform node (layer) True (FinalLinearLayer)
 
 Finally, we discuss a new dataset chosen by the user. This does not require a predefined model; just a predefinition of layer type. The python function is as follows:
 
-python RunBetaExplainer.py (filename) (classification_problem) (layer) (notion_of_groundtruth)
+python RunBetaExplainer.py (filename) (classification_problem) (layer) (notion_of_groundtruth) (FinalLinearLayer)
 
 The notion_of_groundtruth input will take values True or False, based on whether the the "true" explanation is known or not. (layer) will indicate the layer architecture type taking values including GAT, GATv2, SAGE, or GCN. This indicates GATConv, GATv2Conv, SAGEConv, and GCNConv respectively. (classification_problem) takes either node or graph as its value, indicating whether node or graph classification is used. The (filename) component will suggest how to access the dataset.
 
