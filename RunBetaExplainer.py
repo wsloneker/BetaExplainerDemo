@@ -665,7 +665,7 @@ def node_objective(trial):
     alpha = trial.suggest_float('a', 0.1, 5)
     beta = trial.suggest_float('b', 0.1, 5)
     explainer = NodeBetaExplainer.BetaExplainer(model, x, edge_index, torch.device('cpu'), alpha, beta)
-    explainer.train(5, lr)
+    explainer.train(15, lr)
     betaem = explainer.edge_mask()
     faith = faithfulness(model, x, edge_index, betaem)
     res = 1 - faith
@@ -679,9 +679,9 @@ def node_objective(trial):
         for i in range(0, em.shape[0]):
             if em[i] >= 0.5:
                 sparse += 1
-        sparse /= em.shape[0]
-        if sparse != 0:
-            res += 1 - sparse
+        calc = sparse / em.shape[0]
+        if calc > 0 and calc <= 0.6 and faith < 0.95:
+            res += 1 - calc
             res /= 2
         else:
             res = 0
@@ -700,6 +700,18 @@ def graph_objective(trial):
         accuracy, prec, rec, f1 = exp_acc(gt_exp, betaem)
         res += accuracy
         res /= 2
+    else:
+        em = betaem.numpy()
+        sparse = 0
+        for i in range(0, em.shape[0]):
+            if em[i] >= 0.5:
+                sparse += 1
+        calc = sparse / em.shape[0]
+        if calc > 0 and calc <= 0.6 and faith < 0.95:
+            res += 1 - calc
+            res /= 2
+        else:
+            res = 0
     return res
     
 pruner = optuna.pruners.MedianPruner()
@@ -789,7 +801,7 @@ if sys.argv[1] in sergio or sys.argv[1] in shapeggen or sys.argv[1] == 'Texas':
 else:
     fn = sys.argv[1][0:-4]
 df.to_csv(f'SeedResults{fn}.csv')
-if 'Accuracy' in columns:
+if 'Accuracy' in cols:
     acc = np.mean(list(df['Accuracy']))
     prec = np.mean(list(df['Precision']))
     rec = np.mean(list(df['Recall']))
