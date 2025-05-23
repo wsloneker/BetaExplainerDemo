@@ -680,8 +680,11 @@ def node_objective(trial):
             if em[i] >= 0.5:
                 sparse += 1
         sparse /= em.shape[0]
-        res += 1 - sparse
-        res /= 2
+        if sparse != 0:
+            res += 1 - sparse
+            res /= 2
+        else:
+            res = 0
     return res
 
 def graph_objective(trial):
@@ -773,7 +776,7 @@ for run in range(0, 10):
                     sparse += 1
             sparse /= em.shape[0]
             print(f'Unfaithfulness: {faith}, Kept Edges: {sparse}')
-            out = [seed, faith, kept]
+            out = [seed, faith, sparse]
     results.append(out)
 
 if len(out) > 3:
