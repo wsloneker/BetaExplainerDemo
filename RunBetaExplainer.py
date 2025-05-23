@@ -174,6 +174,54 @@ elif sys.argv[1] in sergio:
     y = torch.tensor(labels)
     train_loader = DataLoader(train_dataset, batch_size=num_train, shuffle=True)
     test_loader = DataLoader(test_dataset, batch_size=num_test, shuffle=False)
+elif sys.argv[1] == 'Texas':
+    from torch_geometric.datasets import WebKB
+    dataset = WebKB(root=f'/tmp/{sys.argv[1]}', name=sys.argv[1])
+    data = dataset[0]
+    x = data.x
+    y = data.y
+    edge_index = data.edge_index
+    num_features = x.shape[1]
+    num_classes = np.unique(y.numpy()).shape[0]
+    num = y.shape[0]
+    shuffle_index = []
+    for i in range(0, num):
+        shuffle_index.append(i)
+    shuffle_index = np.array(random.sample(shuffle_index, num))
+    shuffle_index = shuffle_index.astype(np.int32)
+    train_mask = []
+    train_idx = []
+    test_mask = []
+    test_idx = []
+    val_mask = []
+    val_idx = []
+    num_train = int(len(shuffle_index)* 0.6)
+    num_test = int(len(shuffle_index)*0.2)
+    for j in range(0, num):
+        i = shuffle_index[j]
+        if j < num_train:
+            train_idx.append(i)
+        else:
+            if j < num_train + num_test:
+                test_idx.append(i)
+            else:
+                val_idx.append(i)
+    for j in range(0, num):
+        if j in train_idx:
+            train_mask.append(True)
+            test_mask.append(False)
+            val_mask.append(False)
+        elif j in test_idx:
+            train_mask.append(False)
+            test_mask.append(True)
+            val_mask.append(False)
+        else:
+            train_mask.append(False)
+            test_mask.append(False)
+            val_mask.append(True)
+    train_mask = torch.tensor(train_mask)
+    test_mask = torch.tensor(test_mask)
+    val_mask = torch.tensor(val_mask)
 else:    
     adj, features, labels, num_features, num_classes = get_general_data(sys.argv[1])
     edge_index = torch.tensor(adj, dtype=torch.int64)
@@ -291,6 +339,10 @@ else:
     input_features = num_features
 device = torch.device('cpu')
 import NodeBetaExplainer, GraphBetaExplainer
+if sys.argv[5] == 'True':
+    lin = True
+else:
+    lin = False
 class GCN(torch.nn.Module):
     def __init__(self, num_features, hidden_channels, output_size, num_layers, conv_type, heads):
         super(GCN, self).__init__()
@@ -302,25 +354,39 @@ class GCN(torch.nn.Module):
                 elif conv_type == 'GATv2':
                     conv = GATv2Conv(num_features, hidden_channels, heads)
                 elif conv_type == 'GCN':
-                    conv = GCNConv(num_features, hidden_channels)
+                    if not lin and num_layers == 1:
+                        conv = GCNConv(num_features, output_size)
+                    else:
+                        conv = GCNConv(num_features, hidden_channels)
                 else:
-                    conv = SAGEConv(num_features, hidden_channels)
-            else:
+                    if not lin and num_layers == 1:
+                        conv = SAGEConv(num_features, output_size)
+                    else:
+                        conv = SAGEConv(num_features, hidden_channels)
+            else:   
                 if conv_type == 'GAT':
                      conv = GATConv(hidden_channels * heads, hidden_channels, heads)
                 elif conv_type == 'GATv2':
                     conv = GATv2Conv(hidden_channels * heads, hidden_channels, heads)
                 elif conv_type == 'GCN':
-                    conv = GCNConv(hidden_channels, hidden_channels)
+                    if not lin and i == num_layers - 1:
+                        conv = GCNConv(hidden_channels, output_size)
+                    else:
+                        conv = GCNConv(hidden_channels, hidden_channels)
                 else:
-                    conv = SAGEConv(hidden_channels, hidden_channels)
+                    if not lin and i == num_layers - 1:
+                        conv = SAGEConv(hidden_channels, output_size)
+                    else:
+                        conv = SAGEConv(hidden_channels, hidden_channels)
             self.gat_layers.append(conv)
         self.num_layers = num_layers
         if conv_type in ['GAT', 'GATv2']:
             i = hidden_channels * heads
+            self.lin = Linear(i, output_size)
         else:
-            i = hidden_channels
-        self.lin = Linear(i, num_classes)
+            if lin:
+                i = hidden_channels
+                self.lin = Linear(i, output_size)
         self.conv_type = conv_type
     def forward(self, x, edge_index, batch=None, edge_weights=None):
         if batch is None: # No batch given
@@ -333,7 +399,8 @@ class GCN(torch.nn.Module):
             else:
                 x = self.gat_layers[lay](x, edge_index)
         x = F.dropout(x, p=0.2, training=self.training)
-        x = self.lin(x)
+        if lin:
+            x = self.lin(x)
         if sys.argv[2] == 'graph':
             x = global_max_pool(x, batch)
         return x
@@ -347,7 +414,7 @@ def model_objective(trial):
     if conv_type in ['GAT', 'GATv2']:
         upper = 5
     else:
-        upper = 1
+        upper = 0
     heads = trial.suggest_int('heads', 0, upper)
     model = GCN(input_features, hcs, num_classes, layers, conv_type, heads)
     optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=wd)
@@ -606,6 +673,15 @@ def node_objective(trial):
         accuracy, prec, rec, f1 = exp_acc(gt_exp, betaem)
         res += accuracy
         res /= 2
+    else:
+        em = betaem.numpy()
+        sparse = 0
+        for i in range(0, em.shape[0]):
+            if em[i] >= 0.5:
+                sparse += 1
+        sparse /= em.shape[0]
+        res += 1 - sparse
+        res /= 2
     return res
 
 def graph_objective(trial):
@@ -690,14 +766,20 @@ for run in range(0, 10):
             print(f'Accuracy: {accuracy}, Precision: {prec}, Recall: {rec}, F1 Score: {f1}, Unfaithfulness: {faith}')
             out = [seed, accuracy, prec, rec, f1, faith]
         else:
-            print(f'Unfaithfulness: {faith}')
-            out = [seed, faith]
+            em = betaem.numpy()
+            sparse = 0
+            for i in range(0, em.shape[0]):
+                if em[i] >= 0.5:
+                    sparse += 1
+            sparse /= em.shape[0]
+            print(f'Unfaithfulness: {faith}, Kept Edges: {sparse}')
+            out = [seed, faith, kept]
     results.append(out)
 
-if len(out) > 2:
+if len(out) > 3:
     cols = ['Seed', 'Accuracy', 'Precision', 'Recall', 'F1 Score', 'Unfaithfulness']
 else:
-    cols = ['Seed', 'Unfaithfulness']
+    cols = ['Seed', 'Unfaithfulness', 'Kept Edges']
 df = pd.DataFrame(results, columns=cols)
 if sys.argv[1] in sergio or sys.argv[1] in shapeggen:
     fn = sys.argv[1]
@@ -713,4 +795,5 @@ if 'Accuracy' in columns:
     print(f'Average Accuracy: {acc}, Average Precision: {prec}, Average Recall: {rec}, Average F1 Score: {f1}, Average Unfaithfulness: {unfaith}')
 else:
     unfaith = np.mean(list(df['Unfaithfulness']))
-    print(f'Average Unfaithfulness: {unfaith}')
+    sparse = np.mean(list(df['Kept Edges']))
+    print(f'Average Unfaithfulness: {unfaith}, Average Sparsity: {sparse}')
