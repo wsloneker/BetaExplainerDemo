@@ -14,6 +14,8 @@ from torch.nn import functional as F
 from tqdm import tqdm
 from sklearn.metrics import mean_squared_error, precision_score, recall_score, f1_score, accuracy_score
 from torch_geometric.utils import k_hop_subgraph, to_undirected
+import igraph as ig
+import networkx as nx
 # Takes 1 argument
 # Argument 1: Denotes data type; specify 25 or 50 for the 25% and 50% sparse SERGIO datasets; base, hetero, unfair, lessinform, or moreinform for ShapeGGen Simulator datasets
 def get_sergio_data(num):
@@ -446,7 +448,7 @@ for run in range(0, 10):
                 sparse += 1
         sparse /= em.shape[0]
         out = [seed, faith, sparse]
-        print(f'Faithfulness: {faith}, Sparsity: {sparse}')
+        print(f'Faithfulness: {faith}, Fraction of Kept Edges: {sparse}')
         ei = edge_index.numpy()
         for i in range(0, em.shape[0]):
             graphs.append([seed, em[i], ei[0, i], ei[1, i]])
@@ -464,13 +466,107 @@ df1 = pd.DataFrame(graphs, columns=cols1)
 fn = sys.argv[1]
 df1.to_csv(f'SeedGraphResults{fn}.csv')
 if 'Accuracy' in cols:
-    acc = np.mean(list(df['Accuracy']))
-    prec = np.mean(list(df['Precision']))
-    rec = np.mean(list(df['Recall']))
-    f1 = np.mean(list(df['F1 Score']))
-    unfaith = np.mean(list(df['Unfaithfulness']))
+    a = list(df['Accuracy'])
+    acc = np.mean(a)
+    p = list(df['Precision'])
+    prec = np.mean(p)
+    r = list(df['Recall'])
+    rec = np.mean(r)
+    fs = list(df['F1 Score'])
+    f1 = np.mean(fs)
+    un = list(df['Unfaithfulness'])
+    unfaith = np.mean(un)
     print(f'Average Accuracy: {acc}, Average Precision: {prec}, Average Recall: {rec}, Average F1 Score: {f1}, Average Unfaithfulness: {unfaith}')
+    best_acc = 0
+    best_f1 = 0
+    best_faith = 1
+    idx = 0
+    for i in range(0, len(a)):
+        if a[i] >= best_acc and fs[i] >= best_f1 and un[i] <= best_faith:
+            idx = i
+            best_acc = a[i]
+            best_f1 = fs[i]
+            best_faith = un[i]
 else:
-    unfaith = np.mean(list(df['Unfaithfulness']))
-    sparse = np.mean(list(df['Kept Edges']))
-    print(f'Average Unfaithfulness: {unfaith}, Average Sparsity: {sparse}')
+    f = list(df['Unfaithfulness'])
+    unfaith = np.mean(f)
+    k = list(df['Kept Edges'])
+    sparse = np.mean(k)
+    print(f'Average Unfaithfulness: {unfaith}, Average Fraction of Kept Edges: {sparse}')
+    best_faith = 1
+    best_sparse = 1
+    idx = 0
+    for i in range(0, len(f)):
+        if f[i] <= best_faith and k[i] <= best_sparse:
+            idx = i
+            best_faith = f[i]
+            best_sparse = k[i]
+best_seed = list(df['Seed'])[idx]
+if sys.argv[1] in shapeggen or sys.argv[1] == 'Texas':
+    num_nodes = x.shape[0]
+else:
+    num_nodes = num_features
+nodes = [i for i in range(0, num_nodes)]
+df1 = df1[df1['Seed'] == best_seed]
+b1 = list(df1['P1'])
+b2 = list(df1['P2'])
+G = nx.Graph() 
+actual = y.numpy()
+color = dict()
+color[0] = '#2E2585'
+color[1] = '#337538'
+color[2] = '#5DA899'
+color[3] = '#94CBEC'
+color[4] = '#DCCD7D'
+for node in nodes:
+    if sys.argv[1] == 'Texas':
+        col = color[actual[node]]
+    else:
+        col = 'black'
+    G.add_node(node, color=col)
+lst = []
+weights = []
+probs = list(df1['Probability'])
+mx = np.max(probs)
+mn = np.min(probs)
+if sys.argv[1] != 'Texas':
+    tp_edges = df1[df1['Groundtruth'] == 1]
+    tp_set = set()
+    p1s = list(tp_edges['P1'])
+    p2s = list(tp_edges['P2'])
+    for i in range(len(p1s)):
+        p1 = p1s[i]
+        p2 = p2s[i]
+        tp_set.add((p1, p2))
+    true_edge = '#1A85FF'
+    false_positive_edge = '#D41159'
+    false_negative_edge = '#ED9FBC'
+    neg_edges = df1[df1['Groundtruth'] == 1]
+    fn_edges = neg_edges[neg_edges['Probability'] < 0.5]
+    fn_set = set()
+    p1s = list(fn_edges['P1'])
+    p2s = list(fn_edges['P2'])
+    for i in range(0, len(p1s)):
+        p1 = p1s[i]
+        p2 = p2s[i]
+        fn_set.add((p1, p2))
+for i in range(0, len(b1)):
+    p1 = b1[i]
+    p2 = b2[i]
+    if probs[i] >= 0.5:
+        if sys.argv[1] == 'Texas':
+            G.add_edge(p1, p2)
+        else:
+            if (p1, p2) in tp_set:
+                color = true_edge
+            else:
+                color = false_negative_edge
+            G.add_edge(p1, p2, color=color)
+        p = (probs[i] - mn + 1e-5) / (mx - mn)
+        #p = probs[i]
+        weights.append(5 * p)
+    else:
+        if sys.argv[1] != 'Texas' and (p2, p2) in fn_set:
+            G.add_edge(p1, p2, color=false_negative_edge)
+h = ig.Graph.from_networkx(G)
+ig.plot(h, vertex_size=7, edge_width=weights, target=f'{sys.argv[1]}Plot.png')
