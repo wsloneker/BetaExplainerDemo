@@ -14,6 +14,8 @@ from torch.nn import functional as F
 from tqdm import tqdm
 from sklearn.metrics import mean_squared_error, precision_score, recall_score, f1_score, accuracy_score
 from torch_geometric.utils import k_hop_subgraph, to_undirected
+import igraph as ig
+import networkx as nx
 # Takes 4 arguments
 # Argument 1: Denotes data type; specify 25 or 50 for the 25% and 50% sparse SERGIO datasets; base, hetero, unfair, lessinform, or moreinform for ShapeGGen Simulator datasets; specify file name for other files (assumed to be of format labels = f"Labels{file_name}', features = f"Features{file_name}', edge_index = f"EdgeIndex{file_name}' where file_name includes the file type (of csv, npy, tsv, or xlsx) consistant across all types, features is node/graph by number of features, labels if in a csv/tsv/excel is in column "Labels", and edge indices in a csv/tsv/excel is assumed to be in columns "P1" and "P2" denoting connectivity)
 # Argument 2: denotes classification problem type; important for specified files
