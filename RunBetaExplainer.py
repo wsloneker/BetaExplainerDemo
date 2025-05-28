@@ -735,6 +735,7 @@ alpha = study.best_params['a']
 beta = study.best_params['b']
 ep = 500
 results = []
+graphs = []
 for run in range(0, 10):
     seed = np.random.randint(0, 1000001)
     set_seed(int(seed))
@@ -756,8 +757,13 @@ for run in range(0, 10):
                 best_prec = prec
                 best_rec = rec
                 best_faith = faithfulness(model, x, edge_index, exp)
+                best_exp = exp.numpy()
+                best_ei = ei.numpy()
+                best_gt = gt_exp[i].edge_imp.numpy()
         print(f'Best Accuracy: {best_acc}, Best Precision: {best_prec}, Best Recall: {best_rec}, Best F1 Score: {best_f1}., Best Unfaithfulness: {best_faith}')
         out = [seed, best_acc, best_f1, best_prec, best_rec, best_faith]
+        for i in range(0, best_exp.shape[0]):
+            graphs.append([seed, best_exp[i], best_ei[0, i], best_ei[1, i], best_gt[i]])
     elif sys.argv[1] in sergio:
         explainer = GraphBetaExplainer.BetaExplainer(model, graph_data, edge_index, torch.device('cpu'), 2000, alpha, beta)
         explainer.train(ep, lr)
@@ -767,6 +773,11 @@ for run in range(0, 10):
         faith = graph_faithfulness(model, graph_data, edge_index, edge_mask)
         print(f'Accuracy: {acc}, Precision: {prec}, Recall: {rec}, F1 Score: {f1}, Unfaithfulness: {faith}')
         out = [seed, acc, prec, rec, f1, faith]
+        em = em.numpy()
+        ei = edge_index.numpy()
+        gt = gt_grn.numpy()
+        for i in range(0, em.shape[0]):
+            graphs.append([seed, em[i], ei[0, i], ei[1, i], gt[i]])
     else:
         if sys.argv[2] == 'node':
             explainer = NodeBetaExplainer.BetaExplainer(model, x, edge_index, torch.device('cpu'), alpha, beta)
@@ -782,6 +793,11 @@ for run in range(0, 10):
             accuracy, prec, rec, f1 = exp_acc(gt_exp, betaem)
             print(f'Accuracy: {accuracy}, Precision: {prec}, Recall: {rec}, F1 Score: {f1}, Unfaithfulness: {faith}')
             out = [seed, accuracy, prec, rec, f1, faith]
+            em = betaem.numpy()
+            ei = edge_index.numpy()
+            gt = gt_grn.numpy()
+            for i in range(0, em.shape[0]):
+                graphs.append([seed, em[i], ei[0, i], ei[1, i], gt[i]])
         else:
             em = betaem.numpy()
             sparse = 0
@@ -791,18 +807,24 @@ for run in range(0, 10):
             sparse /= em.shape[0]
             print(f'Unfaithfulness: {faith}, Kept Edges: {sparse}')
             out = [seed, faith, sparse]
+            ei = edge_index.numpy()
+            for i in range(0, em.shape[0]):
+                graphs.append([seed, em[i], ei[0, i], ei[1, i]])
     results.append(out)
 
 if len(out) > 3:
     cols = ['Seed', 'Accuracy', 'Precision', 'Recall', 'F1 Score', 'Unfaithfulness']
+    cols1 = ['Seed', 'Probability', 'P1', 'P2', 'Groundtruth']
 else:
     cols = ['Seed', 'Unfaithfulness', 'Kept Edges']
+    cols1 = ['Seed', 'Probability', 'P1', 'P2']
 df = pd.DataFrame(results, columns=cols)
-if sys.argv[1] in sergio or sys.argv[1] in shapeggen or sys.argv[1] == 'Texas':
-    fn = sys.argv[1]
-else:
-    fn = sys.argv[1][0:-4]
+fn = sys.argv[1]
 df.to_csv(f'SeedResults{fn}.csv')
+df1 = pd.DataFrame(graphs, columns=cols1)
+fn = sys.argv[1]
+df1.to_csv(f'SeedGraphResults{fn}.csv')
+
 if 'Accuracy' in cols:
     a = list(df['Accuracy'])
     acc = np.mean(a)
