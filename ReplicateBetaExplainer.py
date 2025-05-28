@@ -394,7 +394,7 @@ else:
 ep = 25
 results = []
 graphs = []
-for run in range(0, 10):
+for run in range(0, 20):
     seed = np.random.randint(0, 1000001)
     set_seed(int(seed))
     if sys.argv[1] in shapeggen:
