@@ -476,7 +476,6 @@ def model_objective(trial):
 pruner = optuna.pruners.MedianPruner()
 study = optuna.create_study(direction='maximize', sampler=optuna.samplers.TPESampler(), pruner=pruner)
 n_tr = 500
-n_tr = 10
 study.optimize(model_objective, n_trials=n_tr)
 if sys.argv[1] in shapeggen:
     num_epochs = 2000
@@ -739,7 +738,6 @@ ep = 500
 results = []
 graphs = []
 runs = 10
-runs = 5
 for run in range(0, runs):
     seed = np.random.randint(0, 1000001)
     set_seed(int(seed))
@@ -867,33 +865,34 @@ else:
             best_faith = f[i]
             best_sparse = k[i]
 best_seed = list(df['Seed'])[idx]
-if sys.argv[1] in shapeggen or sys.argv[1] == 'Texas' or sys.argv[2] == 'node':
-    num_nodes = x.shape[0]
-else:
-    num_nodes = num_features
-nodes = [i for i in range(0, num_nodes)]
-df1 = df1[df1['Seed'] == best_seed]
-b1 = list(df1['P1'])
-b2 = list(df1['P2'])
 G = nx.Graph() 
-actual = y.numpy()
-color = dict()
-color[0] = '#2E2585'
-color[1] = '#337538'
-color[2] = '#5DA899'
-color[3] = '#94CBEC'
-color[4] = '#DCCD7D'
-for node in nodes:
-    if sys.argv[1] == 'Texas':
+if sys.argv[1] == 'Texas':
+    pos = df1[df1['Probability'] >= 0.5]
+    pos_set = []
+    p1s = list(pos['P1'])
+    p2s = list(pos['P2'])
+    for i in range(len(p1s)):
+        p1 = p1s[i]
+        p2 = p2s[i]
+        if p1 not in pos_set:
+            pos_set.append(p1)
+        if p2 not in pos_set:
+            pos_set.append(p2)
+    actual = y.numpy()
+    color = dict()
+    color[0] = '#2E2585'
+    color[1] = '#337538'
+    color[2] = '#5DA899'
+    color[3] = '#94CBEC'
+    color[4] = '#DCCD7D'
+    for node in pos_set:
         col = color[actual[node]]
-    else:
-        col = 'black'
-    G.add_node(node, color=col)
+        G.add_node(node, color=col)
 lst = []
 weights = []
 probs = list(df1['Probability'])
-# mx = np.max(probs)
-# mn = np.min(probs)
+mx = np.max(probs)
+mn = np.min(probs)
 if sys.argv[1] in shapeggen or sys.argv[1] in sergio or groundtruth:
     tp_edges = df1[df1['Groundtruth'] == 1]
     tp_set = set()
@@ -915,6 +914,8 @@ if sys.argv[1] in shapeggen or sys.argv[1] in sergio or groundtruth:
         p1 = p1s[i]
         p2 = p2s[i]
         fn_set.add((p1, p2))
+b1 = list(df1['P1'])
+b2 = list(df1['P2'])
 for i in range(0, len(b1)):
     p1 = b1[i]
     p2 = b2[i]
@@ -927,8 +928,8 @@ for i in range(0, len(b1)):
             G.add_edge(p1, p2, color=color)
         else:
             G.add_edge(p1, p2)
-        # p = (probs[i] - mn + 1e-5) / (mx - mn)
-        p = probs[i]
+        p = (probs[i] - mn + 1e-5) / (mx - mn)
+        # p = probs[i]
         weights.append(5 * p)
     else:
         if sys.argv[1] in shapeggen or sys.argv[1] in sergio or groundtruth:
