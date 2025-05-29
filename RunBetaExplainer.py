@@ -475,13 +475,15 @@ def model_objective(trial):
     return test_acc
 pruner = optuna.pruners.MedianPruner()
 study = optuna.create_study(direction='maximize', sampler=optuna.samplers.TPESampler(), pruner=pruner)
-study.optimize(model_objective, n_trials=500)
+n_tr = 500
+n_tr = 10
+study.optimize(model_objective, n_trials=n_tr)
 if sys.argv[1] in shapeggen:
     num_epochs = 2000
-elif sys.argv[1] in sergio:
-    num_epochs = 50
-else:
+elif sys.argv[1] == 'Texas':
     num_epochs = 250
+else:
+    num_epochs = 50
 print('Best hyperparameters:', study.best_params)
 print('Best Result:', study.best_value)
 lr = study.best_params['lrs']
@@ -495,7 +497,7 @@ print(model)
 optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=wd)
 if sys.argv[2] == 'node':
     y_true = y.numpy()
-    for epoch in range(1, num_epochs):
+    for epoch in range(1, num_epochs + 1):
         model.train()
         optimizer.zero_grad()
         out = model(x, edge_index)
@@ -510,7 +512,7 @@ if sys.argv[2] == 'node':
         val_acc, val_prec, val_rec, val_f1  = evaluate(y_pred[val_mask], y_true[val_mask])
         print(f'Epoch: {epoch:03d}, Train Acc: {train_acc}, Test Acc: {test_acc}, Val Acc: {val_acc}, Loss: {loss}')
 else:
-    for epoch in range(1, num_epochs):
+    for epoch in range(1, num_epochs + 1):
         model.train()
         avgLoss = 0
         for data in tqdm(train_loader, total=47):  # Iterate in batches over the training dataset.
@@ -719,14 +721,14 @@ def graph_objective(trial):
 pruner = optuna.pruners.MedianPruner()
 study = optuna.create_study(direction='maximize', sampler=optuna.samplers.TPESampler(), pruner=pruner)
 if sys.argv[1] in shapeggen:
-    study.optimize(shapeggen_objective, n_trials=500)
+    study.optimize(shapeggen_objective, n_trials=n_tr)
 elif sys.argv[1] in sergio:
-    study.optimize(sergio_objective, n_trials=500)
+    study.optimize(sergio_objective, n_trials=n_tr)
 else:
     if sys.argv[2] == 'node':
-        study.optimize(node_objective, n_trials=500)
+        study.optimize(node_objective, n_trials=n_tr)
     else:
-        study.optimize(graph_objective, n_trials=500)
+        study.optimize(graph_objective, n_trials=n_tr)
 print('Best hyperparameters:', study.best_params)
 print('Best Result:', study.best_value)
 
@@ -736,7 +738,9 @@ beta = study.best_params['b']
 ep = 500
 results = []
 graphs = []
-for run in range(0, 10):
+runs = 10
+runs = 5
+for run in range(0, runs):
     seed = np.random.randint(0, 1000001)
     set_seed(int(seed))
     if sys.argv[1] in shapeggen:
@@ -770,7 +774,7 @@ for run in range(0, 10):
         prediction_mask = explainer.edge_mask()
         em = prediction_mask
         acc, prec, rec, f1 = sergio_metrics(gt_grn, prediction_mask, false_negative_base)
-        faith = graph_faithfulness(model, graph_data, edge_index, edge_mask)
+        faith = graph_faithfulness(model, graph_data, edge_index, em)
         print(f'Accuracy: {acc}, Precision: {prec}, Recall: {rec}, F1 Score: {f1}, Unfaithfulness: {faith}')
         out = [seed, acc, prec, rec, f1, faith]
         em = em.numpy()
@@ -820,9 +824,10 @@ else:
     cols1 = ['Seed', 'Probability', 'P1', 'P2']
 df = pd.DataFrame(results, columns=cols)
 fn = sys.argv[1]
+if fn != 'Texas' and fn not in sergio and fn not in shapeggen:
+    fn = fn[0:-4]
 df.to_csv(f'SeedResults{fn}.csv')
 df1 = pd.DataFrame(graphs, columns=cols1)
-fn = sys.argv[1]
 df1.to_csv(f'SeedGraphResults{fn}.csv')
 
 if 'Accuracy' in cols:
@@ -887,9 +892,9 @@ for node in nodes:
 lst = []
 weights = []
 probs = list(df1['Probability'])
-mx = np.max(probs)
-mn = np.min(probs)
-if sys.arg[1] in shapeggen or sys.argv[1] in sergio or groundtruth:
+# mx = np.max(probs)
+# mn = np.min(probs)
+if sys.argv[1] in shapeggen or sys.argv[1] in sergio or groundtruth:
     tp_edges = df1[df1['Groundtruth'] == 1]
     tp_set = set()
     p1s = list(tp_edges['P1'])
@@ -922,12 +927,12 @@ for i in range(0, len(b1)):
             G.add_edge(p1, p2, color=color)
         else:
             G.add_edge(p1, p2)
-        p = (probs[i] - mn + 1e-5) / (mx - mn)
-        #p = probs[i]
+        # p = (probs[i] - mn + 1e-5) / (mx - mn)
+        p = probs[i]
         weights.append(5 * p)
     else:
         if sys.argv[1] in shapeggen or sys.argv[1] in sergio or groundtruth:
             if (p2, p2) in fn_set:
                 G.add_edge(p1, p2, color=false_negative_edge)
 h = ig.Graph.from_networkx(G)
-ig.plot(h, vertex_size=7, edge_width=weights, target=f'{sys.argv[1]}Plot.png')
+ig.plot(h, vertex_size=7, edge_width=weights, target=f'{fn}Plot.png')
