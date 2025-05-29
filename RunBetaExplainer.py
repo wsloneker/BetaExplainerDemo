@@ -795,7 +795,7 @@ for run in range(0, 10):
             out = [seed, accuracy, prec, rec, f1, faith]
             em = betaem.numpy()
             ei = edge_index.numpy()
-            gt = gt_grn.numpy()
+            gt = gt_exp.numpy()
             for i in range(0, em.shape[0]):
                 graphs.append([seed, em[i], ei[0, i], ei[1, i], gt[i]])
         else:
