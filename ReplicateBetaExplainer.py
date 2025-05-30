@@ -808,6 +808,7 @@ df1 = df1[df1['Seed'] == best_beta_seed]
 df1 = df1[df1['Explainer'] == 'BetaExplainer']
 b1 = list(df1['P1'])
 b2 = list(df1['P2'])
+G = nx.Graph() 
 if sys.argv[1] == 'Texas':
     pos = df1[df1['Probability'] >= 0.5]
     pos_set = []
@@ -873,6 +874,7 @@ df1 = df1[df1['Seed'] == best_gnn_seed]
 df1 = df1[df1['Explainer'] == 'GNNExplainer']
 b1 = list(df1['P1'])
 b2 = list(df1['P2'])
+G = nx.Graph() 
 if sys.argv[1] == 'Texas':
     pos = df1[df1['Probability'] >= 0.5]
     pos_set = []
