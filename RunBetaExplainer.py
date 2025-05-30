@@ -865,6 +865,7 @@ else:
             best_faith = f[i]
             best_sparse = k[i]
 best_seed = list(df['Seed'])[idx]
+df1 = df1[df1['Seed'] == best_seed]
 G = nx.Graph() 
 if sys.argv[1] == 'Texas':
     pos = df1[df1['Probability'] >= 0.5]
@@ -905,15 +906,6 @@ if sys.argv[1] in shapeggen or sys.argv[1] in sergio or groundtruth:
     true_edge = '#1A85FF'
     false_positive_edge = '#D41159'
     false_negative_edge = '#ED9FBC'
-    neg_edges = df1[df1['Groundtruth'] == 1]
-    fn_edges = neg_edges[neg_edges['Probability'] < 0.5]
-    fn_set = set()
-    p1s = list(fn_edges['P1'])
-    p2s = list(fn_edges['P2'])
-    for i in range(0, len(p1s)):
-        p1 = p1s[i]
-        p2 = p2s[i]
-        fn_set.add((p1, p2))
 b1 = list(df1['P1'])
 b2 = list(df1['P2'])
 for i in range(0, len(b1)):
@@ -924,7 +916,7 @@ for i in range(0, len(b1)):
             if (p1, p2) in tp_set:
                 color = true_edge
             else:
-                color = false_negative_edge
+                color = false_positive_edge
             G.add_edge(p1, p2, color=color)
         else:
             G.add_edge(p1, p2)
@@ -933,7 +925,7 @@ for i in range(0, len(b1)):
         weights.append(5 * p)
     else:
         if sys.argv[1] in shapeggen or sys.argv[1] in sergio or groundtruth:
-            if (p2, p2) in fn_set:
+            if (p1, p2) in tp_set:
                 G.add_edge(p1, p2, color=false_negative_edge)
 h = ig.Graph.from_networkx(G)
 ig.plot(h, vertex_size=7, edge_width=weights, target=f'{fn}Plot.png')
