@@ -361,6 +361,7 @@ if sys.argv[1] in sergio:
         beta = 0.65
         gnnlr = 0.00001
         gnnty = 'phenomenon'
+        gnnbat = 300
         rollout = 20
         min_atoms = 1
         c_puct = 8.165129763712843
@@ -372,6 +373,7 @@ if sys.argv[1] in sergio:
         beta = 0.95
         gnnlr = 0.0001
         gnnty = 'phenomenon'
+        gnnbat = 859
         rollout = 4
         min_atoms = 1
         c_puct = 2.0727783316948987
@@ -443,7 +445,7 @@ elif sys.argv[1] in shapeggen:
         c_puct = 7.318672180500459
         expand_atoms = 3
         sample_num = 10
-        subgraphxidx = 3403
+        subgraphxidx = 5
 else:
     lr = 0.02649
     alpha = 1.76
@@ -489,10 +491,11 @@ for run in range(0, 10):
                 best_gt = gt_exp[i].edge_imp.numpy()
         print(f'BetaExplainer Best Accuracy: {best_acc}, Best Precision: {best_prec}, Best Recall: {best_rec}, Best F1 Score: {best_f1}., Best Unfaithfulness: {best_faith}')
         out = [seed, best_acc, best_f1, best_prec, best_rec, best_faith, 'BetaExplainer']
+        results.append(out)
         for i in range(0, best_exp.shape[0]):
             graphs.append([seed, best_exp[i], best_ei[0, i], best_ei[1, i], best_gt[i], 'BetaExplainer'])
-        explainer = GNNExplainer(model)
-        expgnn = explainer.get_explanation_graph(data.x, data.edge_index, lr = lr, ep=ep)
+        explainer = ShapeGGenGNNExplainer(model)
+        expgnn = explainer.get_explanation_graph(x, edge_index, lr = lr, ep=ep)
         betaem = expgnn.edge_imp
         best_acc = 0
         for i in range(0, len(gt_exp)):
@@ -513,10 +516,11 @@ for run in range(0, 10):
                 best_gt = gt_exp[i].edge_imp.numpy()
         print(f'GNNExplainer Best Accuracy: {best_acc}, Best Precision: {best_prec}, Best Recall: {best_rec}, Best F1 Score: {best_f1}., Best Unfaithfulness: {best_faith}')
         out = [seed, best_acc, best_f1, best_prec, best_rec, best_faith, 'GNNExplainer']
+        results.append(out)
         for i in range(0, best_exp.shape[0]):
             graphs.append([seed, best_exp[i], best_ei[0, i], best_ei[1, i], best_gt[i], 'GNNExplainer'])
         explainer = SubgraphX(model, rollout = rollout, min_atoms = min_atoms, c_puct = c_puct, expand_atoms = expand_atoms, sample_num = sample_num)
-        expgnn = explainer.get_explanation_node(x, edge_index, subgraphxidxs, y = y)
+        expgnn = explainer.get_explanation_node(x, edge_index, subgraphxidx, y = y)
         betaem = expgnn.edge_imp
         best_acc = 0
         for i in range(0, len(gt_exp)):
@@ -537,6 +541,7 @@ for run in range(0, 10):
                 best_gt = gt_exp[i].edge_imp.numpy()
         print(f'SubgraphX Best Accuracy: {best_acc}, Best Precision: {best_prec}, Best Recall: {best_rec}, Best F1 Score: {best_f1}., Best Unfaithfulness: {best_faith}')
         out = [seed, best_acc, best_f1, best_prec, best_rec, best_faith, 'SubgraphX']
+        results.append(out)
         for i in range(0, best_exp.shape[0]):
             graphs.append([seed, best_exp[i], best_ei[0, i], best_ei[1, i], best_gt[i], 'SubgraphX'])
     elif sys.argv[1] in sergio:
@@ -548,6 +553,7 @@ for run in range(0, 10):
         faith = graph_faithfulness(model, graph_data, edge_index, em)
         print(f'BetaExplainer Accuracy: {acc}, Precision: {prec}, Recall: {rec}, F1 Score: {f1}, Unfaithfulness: {faith}')
         out = [seed, acc, prec, rec, f1, faith, 'BetaExplainer']
+        results.append(out)
         em = em.numpy()
         ei = edge_index.numpy()
         gt = gt_grn.numpy()
@@ -571,35 +577,42 @@ for run in range(0, 10):
             if bat < gnnbat:
                 bat += 1
             elif bat == gnnbat:
-                x = torch.reshape(batch.x, (batch.x.shape[0], 1))
-                explana = expgnn(x, batch.edge_index, target=batch.y)
+                explana = expgnn(torch.reshape(batch.x, (batch.x.shape[0], 1)), batch.edge_index, target=batch.y)
                 prediction_mask = explana.edge_mask
                 bat += 1
             else:
-                bat
+                break
         em = prediction_mask
         acc, prec, rec, f1 = sergio_metrics(gt_grn, prediction_mask, false_negative_base)
         faith = graph_faithfulness(model, graph_data, edge_index, em)
         print(f'GNNExplainer Accuracy: {acc}, Precision: {prec}, Recall: {rec}, F1 Score: {f1}, Unfaithfulness: {faith}')
-        out = [seed, acc, prec, rec, f1, faith, 'BetaExplainer']
+        out = [seed, acc, prec, rec, f1, faith, 'GNNExplainer']
+        results.append(out)
         em = em.numpy()
         ei = edge_index.numpy()
         gt = gt_grn.numpy()
         for i in range(0, em.shape[0]):
             graphs.append([seed, em[i], ei[0, i], ei[1, i], gt[i], 'GNNExplainer'])
         explainer = SubgraphX(model, rollout = rollout, min_atoms = min_atoms, c_puct = c_puct, expand_atoms = expand_atoms, sample_num = sample_num)
-        expgnn = explainer.get_explanation_node(x, edge_index, subgraphxidxs, y = y)
-        predictiom_mask = expgnn.edge_imp
+        subgraphxbat = 0
+        bat = 0
+        for batch in loader:
+            if bat == subgraphxbat:
+                expgnn = explainer.get_explanation_graph(torch.reshape(batch.x, (batch.x.shape[0], 1)), edge_index)
+            else:
+                break
+        prediction_mask = expgnn.edge_imp
         em = prediction_mask
         acc, prec, rec, f1 = sergio_metrics(gt_grn, prediction_mask, false_negative_base)
         faith = graph_faithfulness(model, graph_data, edge_index, em)
-        print(f'GNNExplainer Accuracy: {acc}, Precision: {prec}, Recall: {rec}, F1 Score: {f1}, Unfaithfulness: {faith}')
-        out = [seed, acc, prec, rec, f1, faith, 'BetaExplainer']
+        print(f'SubgraphX Accuracy: {acc}, Precision: {prec}, Recall: {rec}, F1 Score: {f1}, Unfaithfulness: {faith}')
+        out = [seed, acc, prec, rec, f1, faith, 'SubgraphX']
+        results.append(out)
         em = em.numpy()
         ei = edge_index.numpy()
         gt = gt_grn.numpy()
         for i in range(0, em.shape[0]):
-            graphs.append([seed, em[i], ei[0, i], ei[1, i], gt[i], 'GNNExplainer'])
+            graphs.append([seed, em[i], ei[0, i], ei[1, i], gt[i], 'SubgraphX'])
     else:
         explainer = NodeBetaExplainer.BetaExplainer(model, x, edge_index, torch.device('cpu'), alpha, beta)
         explainer.train(ep, lr)
@@ -611,7 +624,8 @@ for run in range(0, 10):
             if em[i] >= 0.5:
                 sparse += 1
         sparse /= em.shape[0]
-        out = [seed, faith, sparse]
+        out = [seed, faith, sparse, 'BetaExplainer']
+        results.append(out)
         print(f'BetaExplainer Faithfulness: {faith}, Fraction of Kept Edges: {sparse}')
         ei = edge_index.numpy()
         for i in range(0, em.shape[0]):
@@ -628,32 +642,37 @@ for run in range(0, 10):
                 return_type='log_probs',
             ),
         )
-        explana = expgnn(x, edge_index, y)
+        explana = expgnn(x, edge_index, target=y)
         betaem = explana.edge_mask
+        em = betaem.numpy()
         sparse = 0
         for i in range(0, em.shape[0]):
             if em[i] >= 0.5:
                 sparse += 1
         sparse /= em.shape[0]
-        out = [seed, faith, sparse]
+        faith = faithfulness(model, x, edge_index, betaem)
+        out = [seed, faith, sparse, 'GNNExplainer']
+        results.append(out)
         print(f'GNNExplainer Faithfulness: {faith}, Fraction of Kept Edges: {sparse}')
         ei = edge_index.numpy()
         for i in range(0, em.shape[0]):
             graphs.append([seed, em[i], ei[0, i], ei[1, i], 'GNNExplainer'])
         explainer = SubgraphX(model, rollout = rollout, min_atoms = min_atoms, c_puct = c_puct, expand_atoms = expand_atoms, sample_num = sample_num)
-        expgnn = explainer.get_explanation_node(x, edge_index, subgraphxidxs, y = y)
+        expgnn = explainer.get_explanation_node(x, edge_index, subgraphxidx, y = y)
         betaem = expgnn.edge_imp
+        em = betaem.numpy()
         sparse = 0
         for i in range(0, em.shape[0]):
             if em[i] >= 0.5:
                 sparse += 1
         sparse /= em.shape[0]
-        out = [seed, faith, sparse]
+        faith = faithfulness(model, x, edge_index, betaem)
+        out = [seed, faith, sparse, 'SubgraphX']
+        results.append(out)
         print(f'SubgraphX Faithfulness: {faith}, Fraction of Kept Edges: {sparse}')
         ei = edge_index.numpy()
         for i in range(0, em.shape[0]):
             graphs.append([seed, em[i], ei[0, i], ei[1, i], 'SubgraphX'])
-    results.append(out)
 if len(out) > 4:
     cols = ['Seed', 'Accuracy', 'Precision', 'Recall', 'F1 Score', 'Unfaithfulness', 'Explainer']
     cols1 = ['Seed', 'Probability', 'P1', 'P2', 'Groundtruth', 'Explainer']
@@ -686,7 +705,7 @@ if 'Accuracy' in cols:
     betaidx = 0
     for i in range(0, len(a)):
         if a[i] >= best_acc and fs[i] >= best_f1 and un[i] <= best_faith:
-            betaidx = i
+            gnnidx = i
             best_acc = a[i]
             best_f1 = fs[i]
             best_faith = un[i]
@@ -709,6 +728,28 @@ if 'Accuracy' in cols:
     for i in range(0, len(a)):
         if a[i] >= best_acc and fs[i] >= best_f1 and un[i] <= best_faith:
             gnnidx = i
+            best_acc = a[i]
+            best_f1 = fs[i]
+            best_faith = un[i]
+    df = results_df[results_df['Explainer'] == 'SubgraphX']
+    a = list(df['Accuracy'])
+    acc = np.mean(a)
+    p = list(df['Precision'])
+    prec = np.mean(p)
+    r = list(df['Recall'])
+    rec = np.mean(r)
+    fs = list(df['F1 Score'])
+    f1 = np.mean(fs)
+    un = list(df['Unfaithfulness'])
+    unfaith = np.mean(un)
+    print(f'SubgraphX Average Accuracy: {acc}, Average Precision: {prec}, Average Recall: {rec}, Average F1 Score: {f1}, Average Unfaithfulness: {unfaith}')
+    best_acc = 0
+    best_f1 = 0
+    best_faith = 1
+    gnnidx = 0
+    for i in range(0, len(a)):
+        if a[i] >= best_acc and fs[i] >= best_f1 and un[i] <= best_faith:
+            subgrapjxidx = i
             best_acc = a[i]
             best_f1 = fs[i]
             best_faith = un[i]
@@ -741,15 +782,30 @@ else:
             gnnidx = i
             best_faith = f[i]
             best_sparse = k[i]
+    df = results_df[results_df['Explainer'] == 'SubgraphX']
+    f = list(df['Unfaithfulness'])
+    unfaith = np.mean(f)
+    k = list(df['Kept Edges'])
+    sparse = np.mean(k)
+    print(f'SubgraphX Average Unfaithfulness: {unfaith}, Average Fraction of Kept Edges: {sparse}')
+    best_faith = 1
+    best_sparse = 1
+    gnnidx = 0
+    for i in range(0, len(f)):
+        if f[i] <= best_faith and k[i] <= best_sparse:
+            subgraphxidx = i
+            best_faith = f[i]
+            best_sparse = k[i]
 best_beta_seed = list(results_df['Seed'])[betaidx]
 best_gnn_seed = list(results_df['Seed'])[gnnidx]
+best_subgraphx_seed = list(results_df['Seed'])[subgraphxidx]
 if sys.argv[1] in shapeggen or sys.argv[1] == 'Texas':
     num_nodes = x.shape[0]
 else:
     num_nodes = num_features
 nodes = [i for i in range(0, num_nodes)]
-curr = df1.copy()
-df1 = curr[curr['Seed'] == best_beta_seed]
+df1 = pd.read_csv(f'SeedGraphResults{fn}.csv')
+df1 = df1[df1['Seed'] == best_beta_seed]
 df1 = df1[df1['Explainer'] == 'BetaExplainer']
 b1 = list(df1['P1'])
 b2 = list(df1['P2'])
@@ -784,15 +840,6 @@ if sys.argv[1] != 'Texas':
     true_edge = '#1A85FF'
     false_positive_edge = '#D41159'
     false_negative_edge = '#ED9FBC'
-    neg_edges = df1[df1['Groundtruth'] == 1]
-    fn_edges = neg_edges[neg_edges['Probability'] < 0.5]
-    fn_set = set()
-    p1s = list(fn_edges['P1'])
-    p2s = list(fn_edges['P2'])
-    for i in range(0, len(p1s)):
-        p1 = p1s[i]
-        p2 = p2s[i]
-        fn_set.add((p1, p2))
 for i in range(0, len(b1)):
     p1 = b1[i]
     p2 = b2[i]
@@ -803,17 +850,19 @@ for i in range(0, len(b1)):
             if (p1, p2) in tp_set:
                 color = true_edge
             else:
-                color = false_negative_edge
+                color = false_positive_edge
             G.add_edge(p1, p2, color=color)
         p = (probs[i] - mn + 1e-5) / (mx - mn)
         #p = probs[i]
         weights.append(5 * p)
     else:
-        if sys.argv[1] != 'Texas' and (p2, p2) in fn_set:
+        if sys.argv[1] != 'Texas' and (p1, p2) in tp_set:
             G.add_edge(p1, p2, color=false_negative_edge)
 h = ig.Graph.from_networkx(G)
 ig.plot(h, vertex_size=7, edge_width=weights, target=f'{sys.argv[1]}BetaExplainerPlot.png')
-df1 = curr[curr['Seed'] == best_beta_seed]
+
+df1 = pd.read_csv(f'SeedGraphResults{fn}.csv')
+df1 = df1[df1['Seed'] == best_gnn_seed]
 df1 = df1[df1['Explainer'] == 'GNNExplainer']
 b1 = list(df1['P1'])
 b2 = list(df1['P2'])
@@ -848,15 +897,6 @@ if sys.argv[1] != 'Texas':
     true_edge = '#1A85FF'
     false_positive_edge = '#D41159'
     false_negative_edge = '#ED9FBC'
-    neg_edges = df1[df1['Groundtruth'] == 1]
-    fn_edges = neg_edges[neg_edges['Probability'] < 0.5]
-    fn_set = set()
-    p1s = list(fn_edges['P1'])
-    p2s = list(fn_edges['P2'])
-    for i in range(0, len(p1s)):
-        p1 = p1s[i]
-        p2 = p2s[i]
-        fn_set.add((p1, p2))
 for i in range(0, len(b1)):
     p1 = b1[i]
     p2 = b2[i]
@@ -867,78 +907,70 @@ for i in range(0, len(b1)):
             if (p1, p2) in tp_set:
                 color = true_edge
             else:
-                color = false_negative_edge
+                color = false_positive_edge
             G.add_edge(p1, p2, color=color)
         p = (probs[i] - mn + 1e-5) / (mx - mn)
         #p = probs[i]
         weights.append(5 * p)
     else:
-        if sys.argv[1] != 'Texas' and (p2, p2) in fn_set:
+        if sys.argv[1] != 'Texas' and (p1, p2) in tp_set:
             G.add_edge(p1, p2, color=false_negative_edge)
 h = ig.Graph.from_networkx(G)
 ig.plot(h, vertex_size=7, edge_width=weights, target=f'{sys.argv[1]}GNNExplainerPlot.png')
-if sys.argv[1] not in sergio:
-    df1 = curr[curr['Seed'] == best_beta_seed]
-    df1 = df1[df1['Explainer'] == 'SubgraphX']
-    b1 = list(df1['P1'])
-    b2 = list(df1['P2'])
-    G = nx.Graph() 
-    actual = y.numpy()
-    color = dict()
-    color[0] = '#2E2585'
-    color[1] = '#337538'
-    color[2] = '#5DA899'
-    color[3] = '#94CBEC'
-    color[4] = '#DCCD7D'
-    for node in nodes:
+
+df1 = pd.read_csv(f'SeedGraphResults{fn}.csv')
+df1 = df1[df1['Seed'] == best_subgraphx_seed]
+df1 = df1[df1['Explainer'] == 'SubgraphX']
+b1 = list(df1['P1'])
+b2 = list(df1['P2'])
+G = nx.Graph() 
+actual = y.numpy()
+color = dict()
+color[0] = '#2E2585'
+color[1] = '#337538'
+color[2] = '#5DA899'
+color[3] = '#94CBEC'
+color[4] = '#DCCD7D'
+for node in nodes:
+    if sys.argv[1] == 'Texas':
+        col = color[actual[node]]
+    else:
+        col = 'black'
+    G.add_node(node, color=col)
+lst = []
+weights = []
+probs = list(df1['Probability'])
+mx = np.max(probs)
+mn = np.min(probs)
+if sys.argv[1] != 'Texas':
+    tp_edges = df1[df1['Groundtruth'] == 1]
+    tp_set = set()
+    p1s = list(tp_edges['P1'])
+    p2s = list(tp_edges['P2'])
+    for i in range(len(p1s)):
+        p1 = p1s[i]
+        p2 = p2s[i]
+        tp_set.add((p1, p2))
+    true_edge = '#1A85FF'
+    false_positive_edge = '#D41159'
+    false_negative_edge = '#ED9FBC'
+for i in range(0, len(b1)):
+    p1 = b1[i]
+    p2 = b2[i]
+    if probs[i] >= 0.5:
         if sys.argv[1] == 'Texas':
-            col = color[actual[node]]
+            G.add_edge(p1, p2)
         else:
-            col = 'black'
-        G.add_node(node, color=col)
-    lst = []
-    weights = []
-    probs = list(df1['Probability'])
-    mx = np.max(probs)
-    mn = np.min(probs)
-    if sys.argv[1] != 'Texas':
-        tp_edges = df1[df1['Groundtruth'] == 1]
-        tp_set = set()
-        p1s = list(tp_edges['P1'])
-        p2s = list(tp_edges['P2'])
-        for i in range(len(p1s)):
-            p1 = p1s[i]
-            p2 = p2s[i]
-            tp_set.add((p1, p2))
-        true_edge = '#1A85FF'
-        false_positive_edge = '#D41159'
-        false_negative_edge = '#ED9FBC'
-        neg_edges = df1[df1['Groundtruth'] == 1]
-        fn_edges = neg_edges[neg_edges['Probability'] < 0.5]
-        fn_set = set()
-        p1s = list(fn_edges['P1'])
-        p2s = list(fn_edges['P2'])
-        for i in range(0, len(p1s)):
-            p1 = p1s[i]
-            p2 = p2s[i]
-            fn_set.add((p1, p2))
-    for i in range(0, len(b1)):
-        p1 = b1[i]
-        p2 = b2[i]
-        if probs[i] >= 0.5:
-            if sys.argv[1] == 'Texas':
-                G.add_edge(p1, p2)
+            if (p1, p2) in tp_set:
+                color = true_edge
             else:
-                if (p1, p2) in tp_set:
-                    color = true_edge
-                else:
-                    color = false_negative_edge
-                G.add_edge(p1, p2, color=color)
-            p = (probs[i] - mn + 1e-5) / (mx - mn)
-            #p = probs[i]
-            weights.append(5 * p)
-        else:
-            if sys.argv[1] != 'Texas' and (p2, p2) in fn_set:
-                G.add_edge(p1, p2, color=false_negative_edge)
-    h = ig.Graph.from_networkx(G)
-    ig.plot(h, vertex_size=7, edge_width=weights, target=f'{sys.argv[1]}SubgraphXPlot.png')
+                color = false_positive_edge
+            G.add_edge(p1, p2, color=color)
+        p = (probs[i] - mn + 1e-5) / (mx - mn)
+        #p = probs[i]
+        weights.append(5 * p)
+    else:
+        if sys.argv[1] != 'Texas' and (p1, p2) in tp_set:
+            G.add_edge(p1, p2, color=false_negative_edge)
+h = ig.Graph.from_networkx(G)
+ig.plot(h, vertex_size=7, edge_width=weights, target=f'{sys.argv[1]}SubgraphXPlot.png')
