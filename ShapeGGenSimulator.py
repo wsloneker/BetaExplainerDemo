@@ -3979,8 +3979,6 @@ class GNNExplainer(_BaseExplainer):
             torch.arange(x.shape[0]).to(x.device), 
             edge_index, 
             (edge_mask > 0.5)) # Make edge mask into discrete and convert to node mask
-        print(node_imp)
-        print(edge_mask)
         exp = Explanation(
             feature_imp = feature_mask,
             node_imp = node_imp.float(),
@@ -4023,7 +4021,7 @@ def return_ShapeGGen_dataset(data):
     else:
         seed = 1000
         set_seed(seed)
-        Gr = ShapeGGen(shape = 'house', num_subgraphs = 100, prob_connection = 0.006, subgraph_size = 11, n_features = 11, n_informative = 8, class_sep = 0.6, n_clusters_per_class = 2, sens_attribution_noise = 0.5, homophily_coef = 1)
+        Gr = ShapeGGen(shape = 'house', num_subgraphs = 250, prob_connection = 0.006, subgraph_size = 11, n_features = 11, n_informative = 8, class_sep = 0.6, n_clusters_per_class = 2, sens_attribution_noise = 0.5, homophily_coef = 1)
     graph = Gr.generate_shape_graph()
     data = Gr.graph
     train_mask = Gr.fixed_train_mask
