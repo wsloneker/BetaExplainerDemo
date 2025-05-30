@@ -803,26 +803,33 @@ if sys.argv[1] in shapeggen or sys.argv[1] == 'Texas':
     num_nodes = x.shape[0]
 else:
     num_nodes = num_features
-nodes = [i for i in range(0, num_nodes)]
 df1 = pd.read_csv(f'SeedGraphResults{fn}.csv')
 df1 = df1[df1['Seed'] == best_beta_seed]
 df1 = df1[df1['Explainer'] == 'BetaExplainer']
 b1 = list(df1['P1'])
 b2 = list(df1['P2'])
-G = nx.Graph() 
-actual = y.numpy()
-color = dict()
-color[0] = '#2E2585'
-color[1] = '#337538'
-color[2] = '#5DA899'
-color[3] = '#94CBEC'
-color[4] = '#DCCD7D'
-for node in nodes:
-    if sys.argv[1] == 'Texas':
+if sys.argv[1] == 'Texas':
+    pos = df1[df1['Probability'] >= 0.5]
+    pos_set = []
+    p1s = list(pos['P1'])
+    p2s = list(pos['P2'])
+    for i in range(len(p1s)):
+        p1 = p1s[i]
+        p2 = p2s[i]
+        if p1 not in pos_set:
+            pos_set.append(p1)
+        if p2 not in pos_set:
+            pos_set.append(p2)
+    actual = y.numpy()
+    color = dict()
+    color[0] = '#2E2585'
+    color[1] = '#337538'
+    color[2] = '#5DA899'
+    color[3] = '#94CBEC'
+    color[4] = '#DCCD7D'
+    for node in pos_set:
         col = color[actual[node]]
-    else:
-        col = 'black'
-    G.add_node(node, color=col)
+        G.add_node(node, color=col)
 lst = []
 weights = []
 probs = list(df1['Probability'])
@@ -866,20 +873,28 @@ df1 = df1[df1['Seed'] == best_gnn_seed]
 df1 = df1[df1['Explainer'] == 'GNNExplainer']
 b1 = list(df1['P1'])
 b2 = list(df1['P2'])
-G = nx.Graph() 
-actual = y.numpy()
-color = dict()
-color[0] = '#2E2585'
-color[1] = '#337538'
-color[2] = '#5DA899'
-color[3] = '#94CBEC'
-color[4] = '#DCCD7D'
-for node in nodes:
-    if sys.argv[1] == 'Texas':
+if sys.argv[1] == 'Texas':
+    pos = df1[df1['Probability'] >= 0.5]
+    pos_set = []
+    p1s = list(pos['P1'])
+    p2s = list(pos['P2'])
+    for i in range(len(p1s)):
+        p1 = p1s[i]
+        p2 = p2s[i]
+        if p1 not in pos_set:
+            pos_set.append(p1)
+        if p2 not in pos_set:
+            pos_set.append(p2)
+    actual = y.numpy()
+    color = dict()
+    color[0] = '#2E2585'
+    color[1] = '#337538'
+    color[2] = '#5DA899'
+    color[3] = '#94CBEC'
+    color[4] = '#DCCD7D'
+    for node in pos_set:
         col = color[actual[node]]
-    else:
-        col = 'black'
-    G.add_node(node, color=col)
+        G.add_node(node, color=col)
 lst = []
 weights = []
 probs = list(df1['Probability'])
@@ -924,19 +939,28 @@ df1 = df1[df1['Explainer'] == 'SubgraphX']
 b1 = list(df1['P1'])
 b2 = list(df1['P2'])
 G = nx.Graph() 
-actual = y.numpy()
-color = dict()
-color[0] = '#2E2585'
-color[1] = '#337538'
-color[2] = '#5DA899'
-color[3] = '#94CBEC'
-color[4] = '#DCCD7D'
-for node in nodes:
-    if sys.argv[1] == 'Texas':
+if sys.argv[1] == 'Texas':
+    pos = df1[df1['Probability'] >= 0.5]
+    pos_set = []
+    p1s = list(pos['P1'])
+    p2s = list(pos['P2'])
+    for i in range(len(p1s)):
+        p1 = p1s[i]
+        p2 = p2s[i]
+        if p1 not in pos_set:
+            pos_set.append(p1)
+        if p2 not in pos_set:
+            pos_set.append(p2)
+    actual = y.numpy()
+    color = dict()
+    color[0] = '#2E2585'
+    color[1] = '#337538'
+    color[2] = '#5DA899'
+    color[3] = '#94CBEC'
+    color[4] = '#DCCD7D'
+    for node in pos_set:
         col = color[actual[node]]
-    else:
-        col = 'black'
-    G.add_node(node, color=col)
+        G.add_node(node, color=col)
 lst = []
 weights = []
 probs = list(df1['Probability'])
