@@ -763,7 +763,7 @@ for run in range(0, runs):
                 best_ei = ei.numpy()
                 best_gt = gt_exp[i].edge_imp.numpy()
         print(f'Best Accuracy: {best_acc}, Best Precision: {best_prec}, Best Recall: {best_rec}, Best F1 Score: {best_f1}., Best Unfaithfulness: {best_faith}')
-        out = [seed, best_acc, best_f1, best_prec, best_rec, best_faith]
+        out = [seed, best_acc, best_prec, best_rec, best_f1, best_faith]
         for i in range(0, best_exp.shape[0]):
             graphs.append([seed, best_exp[i], best_ei[0, i], best_ei[1, i], best_gt[i]])
     elif sys.argv[1] in sergio:
