@@ -490,7 +490,7 @@ for run in range(0, 10):
                 best_ei = ei.numpy()
                 best_gt = gt_exp[i].edge_imp.numpy()
         print(f'BetaExplainer Best Accuracy: {best_acc}, Best Precision: {best_prec}, Best Recall: {best_rec}, Best F1 Score: {best_f1}., Best Unfaithfulness: {best_faith}')
-        out = [seed, best_acc, best_f1, best_prec, best_rec, best_faith, 'BetaExplainer']
+        out = [seed, best_acc, best_prec, best_rec, best_f1, best_faith, 'BetaExplainer']
         results.append(out)
         for i in range(0, best_exp.shape[0]):
             graphs.append([seed, best_exp[i], best_ei[0, i], best_ei[1, i], best_gt[i], 'BetaExplainer'])
@@ -515,7 +515,7 @@ for run in range(0, 10):
                 best_ei = ei.numpy()
                 best_gt = gt_exp[i].edge_imp.numpy()
         print(f'GNNExplainer Best Accuracy: {best_acc}, Best Precision: {best_prec}, Best Recall: {best_rec}, Best F1 Score: {best_f1}., Best Unfaithfulness: {best_faith}')
-        out = [seed, best_acc, best_f1, best_prec, best_rec, best_faith, 'GNNExplainer']
+        out = [seed, best_acc, best_prec, best_rec, best_f1, best_faith, 'GNNExplainer']
         results.append(out)
         for i in range(0, best_exp.shape[0]):
             graphs.append([seed, best_exp[i], best_ei[0, i], best_ei[1, i], best_gt[i], 'GNNExplainer'])
@@ -540,7 +540,7 @@ for run in range(0, 10):
                 best_ei = ei.numpy()
                 best_gt = gt_exp[i].edge_imp.numpy()
         print(f'SubgraphX Best Accuracy: {best_acc}, Best Precision: {best_prec}, Best Recall: {best_rec}, Best F1 Score: {best_f1}., Best Unfaithfulness: {best_faith}')
-        out = [seed, best_acc, best_f1, best_prec, best_rec, best_faith, 'SubgraphX']
+        out = [seed, best_acc, best_prec, best_rec, best_f1, best_faith, 'SubgraphX']
         results.append(out)
         for i in range(0, best_exp.shape[0]):
             graphs.append([seed, best_exp[i], best_ei[0, i], best_ei[1, i], best_gt[i], 'SubgraphX'])
@@ -686,6 +686,7 @@ df1 = pd.DataFrame(graphs, columns=cols1)
 fn = sys.argv[1]
 df1.to_csv(f'SeedGraphResults{fn}.csv')
 results_df = df.copy()
+all_graphs = df1.copy()
 if 'Accuracy' in cols:
     df = results_df[results_df['Explainer'] == 'BetaExplainer']
     a = list(df['Accuracy'])
@@ -807,12 +808,12 @@ if sys.argv[1] in shapeggen or sys.argv[1] == 'Texas':
     num_nodes = x.shape[0]
 else:
     num_nodes = num_features
-df1 = pd.read_csv(f'SeedGraphResults{fn}.csv')
+df1 = all_graphs.copy()
 df1 = df1[df1['Seed'] == best_beta_seed]
 df1 = df1[df1['Explainer'] == 'BetaExplainer']
 b1 = list(df1['P1'])
 b2 = list(df1['P2'])
-G = nx.Graph() 
+G = nx.DiGraph() 
 if sys.argv[1] == 'Texas':
     pos = df1[df1['Probability'] >= 0.5]
     pos_set = []
@@ -872,13 +873,12 @@ for i in range(0, len(b1)):
             G.add_edge(p1, p2, color=false_negative_edge)
 h = ig.Graph.from_networkx(G)
 ig.plot(h, vertex_size=7, edge_width=weights, target=f'{sys.argv[1]}BetaExplainerPlot.png')
-
-df1 = pd.read_csv(f'SeedGraphResults{fn}.csv')
+df1 = all_graphs.copy()
 df1 = df1[df1['Seed'] == best_gnn_seed]
 df1 = df1[df1['Explainer'] == 'GNNExplainer']
 b1 = list(df1['P1'])
 b2 = list(df1['P2'])
-G = nx.Graph() 
+G = nx.DiGraph() 
 if sys.argv[1] == 'Texas':
     pos = df1[df1['Probability'] >= 0.5]
     pos_set = []
@@ -938,13 +938,12 @@ for i in range(0, len(b1)):
             G.add_edge(p1, p2, color=false_negative_edge)
 h = ig.Graph.from_networkx(G)
 ig.plot(h, vertex_size=7, edge_width=weights, target=f'{sys.argv[1]}GNNExplainerPlot.png')
-
-df1 = pd.read_csv(f'SeedGraphResults{fn}.csv')
+df1 = all_graphs.copy()
 df1 = df1[df1['Seed'] == best_subgraphx_seed]
 df1 = df1[df1['Explainer'] == 'SubgraphX']
 b1 = list(df1['P1'])
 b2 = list(df1['P2'])
-G = nx.Graph() 
+G = nx.DiGraph() 
 if sys.argv[1] == 'Texas':
     pos = df1[df1['Probability'] >= 0.5]
     pos_set = []
