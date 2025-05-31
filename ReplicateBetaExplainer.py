@@ -796,9 +796,12 @@ else:
             subgraphxidx = i
             best_faith = f[i]
             best_sparse = k[i]
-best_beta_seed = list(results_df['Seed'])[betaidx]
-best_gnn_seed = list(results_df['Seed'])[gnnidx]
-best_subgraphx_seed = list(results_df['Seed'])[subgraphxidx]
+subsetbeta = results_df[results_df['Explainer'] == 'BetaExplainer']
+subsetgnn = results_df[results_df['Explainer'] == 'GNNExplainer']
+subsetsubgraph = results_df[results_df['Explainer'] == 'SubgraphX']
+best_beta_seed = list(subsetbeta['Seed'])[betaidx]
+best_gnn_seed = list(subsetgnn['Seed'])[gnnidx]
+best_subgraphx_seed = list(subsetsubgraph['Seed'])[subgraphxidx]
 print(best_beta_seed, best_gnn_seed, best_subgraphx_seed)
 if sys.argv[1] in shapeggen or sys.argv[1] == 'Texas':
     num_nodes = x.shape[0]
