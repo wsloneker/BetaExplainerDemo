@@ -705,7 +705,7 @@ if 'Accuracy' in cols:
     betaidx = 0
     for i in range(0, len(a)):
         if a[i] >= best_acc and fs[i] >= best_f1 and un[i] <= best_faith:
-            gnnidx = i
+            betaidx = i
             best_acc = a[i]
             best_f1 = fs[i]
             best_faith = un[i]
@@ -746,10 +746,10 @@ if 'Accuracy' in cols:
     best_acc = 0
     best_f1 = 0
     best_faith = 1
-    gnnidx = 0
+    subgraphxidx = 0
     for i in range(0, len(a)):
         if a[i] >= best_acc and fs[i] >= best_f1 and un[i] <= best_faith:
-            subgrapjxidx = i
+            subgraphxidx = i
             best_acc = a[i]
             best_f1 = fs[i]
             best_faith = un[i]
@@ -790,7 +790,7 @@ else:
     print(f'SubgraphX Average Unfaithfulness: {unfaith}, Average Fraction of Kept Edges: {sparse}')
     best_faith = 1
     best_sparse = 1
-    gnnidx = 0
+    subgraphxidx = 0
     for i in range(0, len(f)):
         if f[i] <= best_faith and k[i] <= best_sparse:
             subgraphxidx = i
@@ -799,6 +799,7 @@ else:
 best_beta_seed = list(results_df['Seed'])[betaidx]
 best_gnn_seed = list(results_df['Seed'])[gnnidx]
 best_subgraphx_seed = list(results_df['Seed'])[subgraphxidx]
+print(best_beta_seed, best_gnn_seed, best_subgraphx_seed)
 if sys.argv[1] in shapeggen or sys.argv[1] == 'Texas':
     num_nodes = x.shape[0]
 else:
