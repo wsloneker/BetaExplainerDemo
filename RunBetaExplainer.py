@@ -866,7 +866,7 @@ else:
             best_sparse = k[i]
 best_seed = list(df['Seed'])[idx]
 df1 = df1[df1['Seed'] == best_seed]
-G = nx.Graph() 
+G = nx.DiGraph() 
 if sys.argv[1] == 'Texas':
     pos = df1[df1['Probability'] >= 0.5]
     pos_set = []
