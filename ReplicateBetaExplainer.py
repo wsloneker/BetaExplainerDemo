@@ -495,7 +495,7 @@ for run in range(0, 10):
         for i in range(0, best_exp.shape[0]):
             graphs.append([seed, best_exp[i], best_ei[0, i], best_ei[1, i], best_gt[i], 'BetaExplainer'])
         explainer = ShapeGGenGNNExplainer(model)
-        expgnn = explainer.get_explanation_graph(x, edge_index, lr = lr, ep=ep)
+        expgnn = explainer.get_explanation_graph(x, edge_index, lr = gnnlr, ep=ep)
         betaem = expgnn.edge_imp
         best_acc = 0
         for i in range(0, len(gt_exp)):
