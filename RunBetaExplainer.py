@@ -607,7 +607,7 @@ def shapeggen_objective(trial):
         accuracy, f1, prec, rec = graph_exp_acc(gt_exp[i], exp, node_thresh_factor = 0.5)
         if accuracy >= best_acc:
             best_acc = accuracy
-            best_faith = faithfulness(model, x, edge_index, exp)
+            best_faith = faithfulness(model, x, ei, exp)
     best_result = (best_acc + 1 - best_faith) / 2
     return best_result
 
@@ -758,7 +758,7 @@ for run in range(0, runs):
                 best_f1 = f1
                 best_prec = prec
                 best_rec = rec
-                best_faith = faithfulness(model, x, edge_index, exp)
+                best_faith = faithfulness(model, x, ei, exp)
                 best_exp = exp.numpy()
                 best_ei = ei.numpy()
                 best_gt = gt_exp[i].edge_imp.numpy()
