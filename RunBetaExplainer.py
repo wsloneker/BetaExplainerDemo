@@ -22,6 +22,11 @@ import networkx as nx
 # Argument 3: denotes convolutional layer types chosen for model --> best parameters learned in this file
 # Argument 4: denotes whether dataset has known groundtruth
 def get_general_data(dta):
+    ''' 
+        This function loads a generic dataset with a file including labels caled Labels{dta}, feature file called Features{dta}, and edge Index file called EdgeIndex{dta}.
+        It takes the dta where dta denotes specific labels for these sides and the file type - ie 1.npy would be associated with Labels1.npy, Features1.npy, and EdgeIndex1.npy.
+        This takes into account input datasets.
+    '''
     file_name = dta
     if file_name[-3:] == 'npy':
         labels = np.load('Labels' + file_name, allow_pickle=True)
@@ -77,6 +82,7 @@ def get_sergio_data(num):
             gt_grn.append(1) # If in ground truth graph, add 1
         else:
             gt_grn.append(0) # Else add 0
+    # The mask gt_grn indicates whether an edge in the edge index is in the groundtruth (denoted by 1) or not (denoted by 0)
     groundtruth_mask = torch.tensor(gt_grn)
     gt_grn = groundtruth_mask
     false_negative_base = 0
@@ -86,14 +92,20 @@ def get_sergio_data(num):
         if (l1[i], l2[i]) not in full_set:
             false_negative_base += 1
     print(f'Number of Data-based FNs: {false_negative_base}')
+    # false_negative_base are the edges in the groundtruth not present in the groundtruth as explainers cannot suggest these are present
     return adj, features, labels, num_features, num_classes, gt_grn, false_negative_base
 def evaluate(y_pred, y_true):
+    '''Return the accuracy, precision, recall, and F1 scores for GNN classification'''
     acc = accuracy_score(y_true, y_pred)
     prec = precision_score(y_true, y_pred, average='micro')
     rec = recall_score(y_true, y_pred, average='micro')
     f1 = f1_score(y_true, y_pred, average='micro')
     return acc, prec, rec, f1 
 def sergio_metrics(gt_grn, prediction_mask, false_negative_base):
+    '''
+        Return the accuracy, precision, recall, and F1 score for an explainer on the SERGIO groundtruth mask (gt_grn) given an explanation mask (prediction_mask).
+        Also takes into account groundtruth elements not present in input edge index, which an explainer cannot predict upon.
+    '''
     tp = 0
     tn = 0
     fn = false_negative_base
@@ -126,11 +138,13 @@ def sergio_metrics(gt_grn, prediction_mask, false_negative_base):
 shapeggen = ['base', 'heterophilic', 'unfair', 'moreinform', 'lessinform', 'test']
 sergio = ['25', '50']
 conv_type = sys.argv[3]
+# Denotes whether new user dataset has a groundtruth
 if sys.argv[4] == 'True':
     groundtruth = True
 else:
     groundtruth = False
 if sys.argv[1] in shapeggen:
+    '''Sets up dataset if it's a ShapeGGen dataset'''
     if sys.argv[1] == 'lessinform':
         num_features = 22
     else:
@@ -139,6 +153,7 @@ if sys.argv[1] in shapeggen:
     num_classes = np.unique(y.numpy()).shape[0]
     num_hops = 3
 elif sys.argv[1] in sergio:
+    '''Sets up dataset if it's a SERGIO dataset'''
     adj, features, labels, num_features, num_classes, gt_grn, false_negative_base = get_sergio_data(sys.argv[1])
     edge_index = torch.tensor(adj, dtype=torch.int64)
     features = features.astype(np.float32)
@@ -177,6 +192,7 @@ elif sys.argv[1] in sergio:
     train_loader = DataLoader(train_dataset, batch_size=num_train, shuffle=True)
     test_loader = DataLoader(test_dataset, batch_size=num_test, shuffle=False)
 elif sys.argv[1] == 'Texas':
+    '''Sets up Texas dataset'''
     from torch_geometric.datasets import WebKB
     dataset = WebKB(root=f'/tmp/{sys.argv[1]}', name=sys.argv[1])
     data = dataset[0]
@@ -225,12 +241,14 @@ elif sys.argv[1] == 'Texas':
     test_mask = torch.tensor(test_mask)
     val_mask = torch.tensor(val_mask)
 else:    
+    '''Sets up general dataset'''
     adj, features, labels, num_features, num_classes = get_general_data(sys.argv[1])
     edge_index = torch.tensor(adj, dtype=torch.int64)
     features = features.astype(np.float32)
     num_edges = np.array(adj).shape[1]
     labels = labels.astype(np.int64)
     if groundtruth:
+        '''Sets up Edge Index groundtruth mask to judge accuracy if relevent to generic dataset'''
         file_name = sys.argv[1]
         if file_name[-3:] == 'npy':
             gt = np.load('GTEdgeIndex' + file_name, allow_pickle=True).astype(np.int64)
@@ -260,6 +278,7 @@ else:
             lst2 = list(df_gt['P2'])
             gt_exp = torch.tensor(np.array([lst1, lst2]).astype(np.int64))
     if sys.argv[2] == 'node':
+        '''Sets up dataset if it is a node classification problem'''
         x = torch.tensor(features)
         y = torch.tensor(labels)
         num_nodes = features.shape[0]
@@ -302,6 +321,7 @@ else:
         test_mask = torch.tensor(test_mask)
         val_mask = torch.tensor(val_mask)
     else:
+        ''Sets up dataset if it is a graph classification problem'''
         edge_weight = torch.ones(num_edges)
         num_graphs = len(labels)
         graph_data = []
@@ -335,12 +355,15 @@ else:
         y = torch.tensor(labels)
         train_loader = DataLoader(train_dataset, batch_size=num_train, shuffle=True)
         test_loader = DataLoader(test_dataset, batch_size=num_test, shuffle=False)
+# Sets up input features based on classification problem
 if sys.argv[2] == 'graph':
     input_features = 1
 else:
     input_features = num_features
 device = torch.device('cpu')
+# Import BetaExplainer files for running BetaExplainer
 import NodeBetaExplainer, GraphBetaExplainer
+# Determine whether model incorporates final linear layer (if GATConv and GATv2Conv layers are not used
 if sys.argv[5] == 'True':
     lin = True
 else:
@@ -409,6 +432,7 @@ class GCN(torch.nn.Module):
 y_true = y.numpy()
 criterion = torch.nn.CrossEntropyLoss()
 def model_objective(trial):
+    # Find the best parameters for a model on the given dataset
     lr = trial.suggest_float('lrs', 1e-6, 0.2)
     wd = trial.suggest_float('wds', 0, 1)
     hcs = trial.suggest_int('hcs', 2, 512)
@@ -483,6 +507,7 @@ elif sys.argv[1] == 'Texas':
     num_epochs = 250
 else:
     num_epochs = 50
+# Get Best Parameters for dataset
 print('Best hyperparameters:', study.best_params)
 print('Best Result:', study.best_value)
 lr = study.best_params['lrs']
@@ -494,6 +519,7 @@ criterion = torch.nn.CrossEntropyLoss()
 model = GCN(input_features, hcs, num_classes, layers, conv_type, heads).to(device)
 print(model)
 optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=wd)
+# Train model based on classification problem type
 if sys.argv[2] == 'node':
     y_true = y.numpy()
     for epoch in range(1, num_epochs + 1):
