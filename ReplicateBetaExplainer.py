@@ -841,6 +841,7 @@ if sys.argv[1] in shapeggen or sys.argv[1] == 'Texas':
 else:
     num_nodes = num_features
 df1 = all_graphs.copy()
+# graph best BetaExplanation explanation graph
 df1 = df1[df1['Seed'] == best_beta_seed]
 df1 = df1[df1['Explainer'] == 'BetaExplainer']
 b1 = list(df1['P1'])
@@ -866,6 +867,8 @@ if sys.argv[1] == 'Texas':
     color[3] = '#94CBEC'
     color[4] = '#DCCD7D'
     for node in pos_set:
+        # add nodes associated with edge included in explanation graph (IE probability of at least 0.5) and denote the class through color for Texas
+        # this will give a sense of whether the explanation graph is more homophilic than the original Texas graph
         col = color[actual[node]]
         G.add_node(node, color=col)
 lst = []
@@ -874,6 +877,8 @@ probs = list(df1['Probability'])
 mx = np.max(probs)
 mn = np.min(probs)
 if sys.argv[1] != 'Texas':
+    # non-Texas graphs have a notion of groundtruth
+    # we make a set of the groundtruth edges tp_set to check edges against
     tp_edges = df1[df1['Groundtruth'] == 1]
     tp_set = set()
     p1s = list(tp_edges['P1'])
@@ -882,29 +887,34 @@ if sys.argv[1] != 'Texas':
         p1 = p1s[i]
         p2 = p2s[i]
         tp_set.add((p1, p2))
-    true_edge = '#1A85FF'
-    false_positive_edge = '#D41159'
-    false_negative_edge = '#ED9FBC'
+    true_edge = '#1A85FF' # denote color of true positive edges (light blue)
+    false_positive_edge = '#D41159' # denote color of false positive edges (magenta)
+    false_negative_edge = '#ED9FBC' # denote color of false negative edges (light pink)
 for i in range(0, len(b1)):
     p1 = b1[i]
     p2 = b2[i]
     if probs[i] >= 0.5:
+        # add chosen edges --> those with probability of at least 0.5
         if sys.argv[1] == 'Texas':
-            G.add_edge(p1, p2)
+            G.add_edge(p1, p2) # no color added for Texas as there isn't a notion of groundtruth
         else:
+            # for datasets with groundtruth, denote associated color of edge
             if (p1, p2) in tp_set:
-                color = true_edge
+                color = true_edge # if it's an edge in the groundtruth, denote it as a blue color
             else:
-                color = false_positive_edge
+                color = false_positive_edge # if it's an edge not in the groundtruth, denote it as a magenta edge to indicate it's inaccurate
             G.add_edge(p1, p2, color=color)
-        p = (probs[i] - mn + 1e-5) / (mx - mn)
+        p = (probs[i] - mn + 1e-5) / (mx - mn) # add edge weighting based on edge probability
         #p = probs[i]
         weights.append(5 * p)
     else:
+        # for datasets with groundtruth, add edges that are false negatives, labeling them with light pink
+        # this will indicate that the edge should be in the explanation but isnt
         if sys.argv[1] != 'Texas' and (p1, p2) in tp_set:
             G.add_edge(p1, p2, color=false_negative_edge)
 h = ig.Graph.from_networkx(G)
 ig.plot(h, vertex_size=7, edge_width=weights, target=f'{sys.argv[1]}BetaExplainerPlot.png')
+# graph best GNNExplanation explanation graph
 df1 = all_graphs.copy()
 df1 = df1[df1['Seed'] == best_gnn_seed]
 df1 = df1[df1['Explainer'] == 'GNNExplainer']
@@ -970,6 +980,7 @@ for i in range(0, len(b1)):
             G.add_edge(p1, p2, color=false_negative_edge)
 h = ig.Graph.from_networkx(G)
 ig.plot(h, vertex_size=7, edge_width=weights, target=f'{sys.argv[1]}GNNExplainerPlot.png')
+# graph best SubgraphX explanation graph
 df1 = all_graphs.copy()
 df1 = df1[df1['Seed'] == best_subgraphx_seed]
 df1 = df1[df1['Explainer'] == 'SubgraphX']
