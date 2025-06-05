@@ -371,6 +371,7 @@ else:
 class GCN(torch.nn.Module):
     def __init__(self, num_features, hidden_channels, output_size, num_layers, conv_type, heads):
         super(GCN, self).__init__()
+        ''' Define the general GNN model based on a given convolution type (conv_type), hidden channels, number of layers, and heads if it's an attention based model '''
         self.gat_layers = torch.nn.ModuleList()
         for i in range(0, num_layers):
             if i == 0:
@@ -446,6 +447,7 @@ def model_objective(trial):
     optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=wd)
     num_epochs = 5
     if sys.argv[2] == 'node':
+        # train if it's a node classification problem
         y_true = y.numpy()
         for epoch in range(1, num_epochs + 1):
             model.train()
@@ -462,6 +464,7 @@ def model_objective(trial):
             val_acc, prec, rec, f1 = evaluate(y_pred[val_mask], y_true[val_mask])
             # print(f'Epoch: {epoch:03d}, Train Acc: {train_acc:.4f}, Test Acc: {test_acc:.4f}, Val Acc: {val_acc:.4f}, Loss: {loss:.4f}')
     else:
+        # train if it's a graph classification problem
         for epoch in range(1, num_epochs + 1):
             model.train()
             avgLoss = 0
@@ -498,9 +501,11 @@ def model_objective(trial):
             # print(f'Epoch: {epoch:03d}, Train Acc: {train_acc:.4f}, Test Acc: {test_acc:.4f}, Loss: {loss:.4f}')
     return test_acc
 pruner = optuna.pruners.MedianPruner()
+# get best parameters for the chosen GNN
 study = optuna.create_study(direction='maximize', sampler=optuna.samplers.TPESampler(), pruner=pruner)
 n_tr = 500
 study.optimize(model_objective, n_trials=n_tr)
+# get GNN training epochs based on dataset
 if sys.argv[1] in shapeggen:
     num_epochs = 2000
 elif sys.argv[1] == 'Texas':
@@ -573,6 +578,7 @@ else:
         print(f'Epoch: {epoch:03d}, Train Acc: {train_acc}, Test Acc: {test_acc}, Loss: {loss}')
 
 def faithfulness(model, X, G, edge_mask):
+    ''' This function defines the similarity of the model output on the edge index masked out by the edge mask to the original output for node classification datasets '''
     org_vec = model(X, G)
     lst = []
     for i in range(0, edge_mask.shape[0]):
@@ -586,6 +592,7 @@ def faithfulness(model, X, G, edge_mask):
     return res
 
 def graph_faithfulness(model, X, G, edge_mask):
+    ''' This function defines the similarity of the model output on the edge index masked out by the edge mask to the original output for graph classification datasets '''
     org_vec = []
     for data in X:
         data.x = torch.reshape(data.x, (data.x.shape[0], 1))
@@ -617,6 +624,7 @@ def graph_faithfulness(model, X, G, edge_mask):
 ei = edge_index
 
 def shapeggen_objective(trial):
+    ''' Get the best hyperparameters for the ShapeGGen dataset to mimic the methods of measuring explanation accuracy '''
     lr = trial.suggest_float('lrs', 1e-6, 0.1)
     alpha = trial.suggest_float('a', 0.1, 1)
     beta = trial.suggest_float('b', 0.1, 1)
@@ -634,10 +642,11 @@ def shapeggen_objective(trial):
         if accuracy >= best_acc:
             best_acc = accuracy
             best_faith = faithfulness(model, x, ei, exp)
-    best_result = (best_acc + 1 - best_faith) / 2
+    best_result = (best_acc + 1 - best_faith) / 2 # get parameters associated with the best accuracy and faithfulness
     return best_result
 
 def sergio_objective(trial):
+    ''' Get the best hyperparameters for the SERGIO dataset '''
     lr = trial.suggest_float('lrs', 1e-6, 0.1)
     alpha = trial.suggest_float('a', 0.1, 1)
     beta = trial.suggest_float('b', 0.1, 1)
@@ -645,9 +654,9 @@ def sergio_objective(trial):
     explainer.train(5, lr)
     prediction_mask = explainer.edge_mask()
     em = prediction_mask
-    acc, prec, rec, f1 = sergio_metrics(gt_grn, prediction_mask, false_negative_base)
+    acc, prec, rec, f1 = sergio_metrics(gt_grn, prediction_mask, false_negative_base) # get parameters associated with the best accuracy
     return acc
-
+# denote whether a new, non-paper dataset has a notion of groundtruth
 gt = sys.argv[4]
 if gt == 'True':
     groundtruth = True
@@ -655,6 +664,7 @@ else:
     groundtruth = False
 
 def exp_acc(gt_exp, betaem):
+    ''' Calculate explanation accuracy for a general dataset ''''
     gt = gt_exp.numpy()
     em = betaem.numpy()
     tp = 0
@@ -690,19 +700,21 @@ def exp_acc(gt_exp, betaem):
     return acc, prec, rec, f1
 
 def node_objective(trial):
+    ''' Get best parameters for general node classification GNN problem '''
     lr = trial.suggest_float('lrs', 1e-6, 0.05)
     alpha = trial.suggest_float('a', 0.1, 5)
     beta = trial.suggest_float('b', 0.1, 5)
     explainer = NodeBetaExplainer.BetaExplainer(model, x, edge_index, torch.device('cpu'), alpha, beta)
-    explainer.train(15, lr)
+    explainer.train(5, lr)
     betaem = explainer.edge_mask()
-    faith = faithfulness(model, x, edge_index, betaem)
+    faith = faithfulness(model, x, edge_index, betaem) # faithfulness may be measured for all datasets so is incorporated as part of metric
     res = 1 - faith
     if groundtruth:
         accuracy, prec, rec, f1 = exp_acc(gt_exp, betaem)
         res += accuracy
-        res /= 2
+        res /= 2 # averages 1 - faithfulness and accuracy for groundtruth datasets (we want to increase both values)
     else:
+        # if no groundtruth, ensure explanation is sparse (IE doesn't include too many edges)
         em = betaem.numpy()
         sparse = 0
         for i in range(0, em.shape[0]):
@@ -717,19 +729,21 @@ def node_objective(trial):
     return res
 
 def graph_objective(trial):
+    ''' Get best parameters for general graph classification GNN problem '''
     lr = trial.suggest_float('lrs', 1e-6, 0.05)
     alpha = trial.suggest_float('a', 0.1, 5)
     beta = trial.suggest_float('b', 0.1, 5)
     explainer = GraphBetaExplainer.BetaExplainer(model, graph_data, edge_index, torch.device('cpu'), num_graphs, alpha, beta)
     explainer.train(5, lr)
     betaem = explainer.edge_mask()
-    faith = graph_faithfulness(model, graph_data, edge_index, betaem)
+    faith = graph_faithfulness(model, graph_data, edge_index, betaem) # faithfulness may be measured for all datasets so is incorporated as part of metric
     res = 1 - faith
     if groundtruth:
         accuracy, prec, rec, f1 = exp_acc(gt_exp, betaem)
         res += accuracy
-        res /= 2
+        res /= 2 # averages 1 - faithfulness and accuracy for groundtruth datasets (we want to increase both values)
     else:
+        # if no groundtruth, ensure explanation is sparse (IE doesn't include too many edges)
         em = betaem.numpy()
         sparse = 0
         for i in range(0, em.shape[0]):
@@ -742,7 +756,7 @@ def graph_objective(trial):
         else:
             res = 0
     return res
-    
+# get best BetaExplainer parameters    
 pruner = optuna.pruners.MedianPruner()
 study = optuna.create_study(direction='maximize', sampler=optuna.samplers.TPESampler(), pruner=pruner)
 if sys.argv[1] in shapeggen:
@@ -764,6 +778,8 @@ ep = 500
 results = []
 graphs = []
 runs = 10
+# run 10 runs of BetaExplainer with random seeds each time, to see variability of the chosen explanation
+# add results and record probabilities for each edge for all graphs
 for run in range(0, runs):
     seed = np.random.randint(0, 1000001)
     set_seed(int(seed))
@@ -839,7 +855,7 @@ for run in range(0, runs):
             for i in range(0, em.shape[0]):
                 graphs.append([seed, em[i], ei[0, i], ei[1, i]])
     results.append(out)
-
+# generate returned csv based on the chosen metrics (taking into account presence or absence of groundtruth
 if len(out) > 3:
     cols = ['Seed', 'Accuracy', 'Precision', 'Recall', 'F1 Score', 'Unfaithfulness']
     cols1 = ['Seed', 'Probability', 'P1', 'P2', 'Groundtruth']
@@ -853,7 +869,8 @@ if fn != 'Texas' and fn not in sergio and fn not in shapeggen:
 df.to_csv(f'SeedResults{fn}.csv')
 df1 = pd.DataFrame(graphs, columns=cols1)
 df1.to_csv(f'SeedGraphResults{fn}.csv')
-
+# Return average metrics for datasets taking into account the Texas dataset does not have a notion of groundtruth --> only faithfulness and number of edge indices kept
+# Return the seed for the best performing metrics for each explainer to choose this seed as to chose this explanation to graph
 if 'Accuracy' in cols:
     a = list(df['Accuracy'])
     acc = np.mean(a)
@@ -892,6 +909,7 @@ else:
             best_sparse = k[i]
 best_seed = list(df['Seed'])[idx]
 df1 = df1[df1['Seed'] == best_seed]
+# graph best BetaExplanation explanation graph
 G = nx.DiGraph() 
 if sys.argv[1] == 'Texas':
     pos = df1[df1['Probability'] >= 0.5]
@@ -913,6 +931,8 @@ if sys.argv[1] == 'Texas':
     color[3] = '#94CBEC'
     color[4] = '#DCCD7D'
     for node in pos_set:
+        # add nodes associated with edge included in explanation graph (IE probability of at least 0.5) and denote the class through color for Texas
+        # this will give a sense of whether the explanation graph is more homophilic than the original Texas graph
         col = color[actual[node]]
         G.add_node(node, color=col)
 lst = []
@@ -921,6 +941,8 @@ probs = list(df1['Probability'])
 mx = np.max(probs)
 mn = np.min(probs)
 if sys.argv[1] in shapeggen or sys.argv[1] in sergio or groundtruth:
+    # ShapeGGen, SERGIO, and specified new datasets with groundtruth have a notion of groundtruth
+    # we make a set of the groundtruth edges tp_set to check edges against
     tp_edges = df1[df1['Groundtruth'] == 1]
     tp_set = set()
     p1s = list(tp_edges['P1'])
@@ -938,18 +960,21 @@ for i in range(0, len(b1)):
     p1 = b1[i]
     p2 = b2[i]
     if probs[i] >= 0.5:
+        # add chosen edges --> those with probability of at least 0.5
         if sys.argv[1] in shapeggen or sys.argv[1] in sergio or groundtruth:
             if (p1, p2) in tp_set:
-                color = true_edge
+                color = true_edge # if it's an edge in the groundtruth, denote it as a blue color
             else:
-                color = false_positive_edge
+                color = false_positive_edge # if it's an edge not in the groundtruth, denote it as a magenta edge to indicate it's inaccurate
             G.add_edge(p1, p2, color=color)
         else:
-            G.add_edge(p1, p2)
-        p = (probs[i] - mn + 1e-5) / (mx - mn)
+            G.add_edge(p1, p2)  # no edge color added for datasets without a notion of groundtruth
+        p = (probs[i] - mn + 1e-5) / (mx - mn) # add edge weighting based on edge probability
         # p = probs[i]
         weights.append(5 * p)
     else:
+        # for datasets with groundtruth, add edges that are false negatives, labeling them with light pink
+        # this will indicate that the edge should be in the explanation but isn't
         if sys.argv[1] in shapeggen or sys.argv[1] in sergio or groundtruth:
             if (p1, p2) in tp_set:
                 G.add_edge(p1, p2, color=false_negative_edge)
