@@ -487,6 +487,7 @@ results = []
 graphs = []
 for run in range(0, 10):
     # Run explainer datasets across 10 random scenes to get a sense of variability of explainers
+    # add results and record probabilities for each edge for all graphs
     seed = np.random.randint(0, 1000001)
     set_seed(int(seed))
     if sys.argv[1] in shapeggen:
@@ -896,7 +897,7 @@ for i in range(0, len(b1)):
     if probs[i] >= 0.5:
         # add chosen edges --> those with probability of at least 0.5
         if sys.argv[1] == 'Texas':
-            G.add_edge(p1, p2) # no color added for Texas as there isn't a notion of groundtruth
+            G.add_edge(p1, p2) # no edge color added for Texas as there isn't a notion of groundtruth
         else:
             # for datasets with groundtruth, denote associated color of edge
             if (p1, p2) in tp_set:
@@ -909,7 +910,7 @@ for i in range(0, len(b1)):
         weights.append(5 * p)
     else:
         # for datasets with groundtruth, add edges that are false negatives, labeling them with light pink
-        # this will indicate that the edge should be in the explanation but isnt
+        # this will indicate that the edge should be in the explanation but isn't
         if sys.argv[1] != 'Texas' and (p1, p2) in tp_set:
             G.add_edge(p1, p2, color=false_negative_edge)
 h = ig.Graph.from_networkx(G)
