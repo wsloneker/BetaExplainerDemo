@@ -59,12 +59,17 @@ def get_sergio_data(num):
     print(f'Number of Data-based FNs: {false_negative_base}')
     return adj, features, labels, num_features, num_classes, gt_grn, false_negative_base
 def evaluate(y_pred, y_true):
+    '''Return the accuracy, precision, recall, and F1 scores for GNN classification'''
     acc = accuracy_score(y_true, y_pred)
     prec = precision_score(y_true, y_pred, average='micro')
     rec = recall_score(y_true, y_pred, average='micro')
     f1 = f1_score(y_true, y_pred, average='micro')
     return acc, prec, rec, f1 
 def sergio_metrics(gt_grn, prediction_mask, false_negative_base):
+    '''
+        Return the accuracy, precision, recall, and F1 score for an explainer on the SERGIO groundtruth mask (gt_grn) given an explanation mask (prediction_mask).
+        Also takes into account groundtruth elements not present in input edge index, which an explainer cannot predict upon.
+    '''
     tp = 0
     tn = 0
     fn = false_negative_base
@@ -99,6 +104,7 @@ def sergio_metrics(gt_grn, prediction_mask, false_negative_base):
 shapeggen = ['base', 'heterophilic', 'unfair', 'moreinform', 'lessinform', 'test']
 sergio = ['25', '50']
 if sys.argv[1] in shapeggen:
+    ''' Set up ShapeGGen dataset and various associated parameters for the model/explanation such as the number of features.'''
     if sys.argv[1] == 'lessinform':
         num_features = 22
     else:
@@ -107,6 +113,7 @@ if sys.argv[1] in shapeggen:
     num_classes = np.unique(y.numpy()).shape[0]
     num_hops = 3
 elif sys.argv[1] in sergio:
+    ''' Set up the SERGIO dataset if chosen'''
     adj, features, labels, num_features, num_classes, gt_grn, false_negative_base = get_sergio_data(sys.argv[1])
     edge_index = torch.tensor(adj, dtype=torch.int64)
     features = features.astype(np.float32)
@@ -145,6 +152,7 @@ elif sys.argv[1] in sergio:
     train_loader = DataLoader(train_dataset, batch_size=1, shuffle=True)
     test_loader = DataLoader(test_dataset, batch_size=1, shuffle=False)
 else:
+    '''Set up the Texas dataset'''
     from torch_geometric.datasets import WebKB
     dataset = WebKB(root=f'/tmp/{sys.argv[1]}', name=sys.argv[1])
     data = dataset[0]
@@ -192,15 +200,18 @@ else:
     train_mask = torch.tensor(train_mask)
     test_mask = torch.tensor(test_mask)
     val_mask = torch.tensor(val_mask)
+''' Get the number of features for the model '''
 if sys.argv[1] in 'sergio':
     input_features = 1
 else:
     input_features = num_features
 device = torch.device('cpu')
+# Import files for running BetaExplainers
 import NodeBetaExplainer, GraphBetaExplainer
 criterion = torch.nn.CrossEntropyLoss()
 class SERGIOGCN(torch.nn.Module):
     def __init__(self, output_size):
+        ''' Define the model chosen for the SERGIO datasets '''
         super(SERGIOGCN, self).__init__()
         self.conv1 = SAGEConv(1, output_size)
         self.embedding_size = output_size
@@ -214,6 +225,7 @@ class SERGIOGCN(torch.nn.Module):
         return x
 class xAIGCN(torch.nn.Module):
     def __init__(self, hidden_channels, input_feat, classes):
+        ''' Define the model for the ShapeGGen datasets '''
         super(xAIGCN, self).__init__()
         self.conv1 = GCNConv(input_feat, hidden_channels)
         self.conv2 = GCNConv(hidden_channels, classes)
@@ -224,6 +236,7 @@ class xAIGCN(torch.nn.Module):
         x = self.conv2(x, edge_index)
         return x
 y_true = y.numpy()
+# Get GNN training parameters for the given datasets (number of epochs, learning rate, and weight decay)
 if sys.argv[1] in shapeggen:
     num_epochs = 2000
     if sys.argv[1] == 'base':
@@ -259,7 +272,9 @@ else:
     model = xAIGCN(1703, input_features, num_classes)
 print(model)
 optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=wd)
+# Train the model
 if sys.argv[1] in shapeggen or sys.argv[1] == 'Texas':
+    # Train the model if it's a node classification dataset (Texas, and ShapeGGen datasets)
     y_true = y.numpy()
     for epoch in range(1, num_epochs + 1):
         model.train()
@@ -276,6 +291,7 @@ if sys.argv[1] in shapeggen or sys.argv[1] == 'Texas':
         val_acc, val_prec, val_rec, val_f1  = evaluate(y_pred[val_mask], y_true[val_mask])
         print(f'Epoch: {epoch:03d}, Train Acc: {train_acc}, Test Acc: {test_acc}, Val Acc: {val_acc}, Loss: {loss}')
 else:
+    # Train model if it's a graph classification dataset (SERGIO datasets)
     for epoch in range(1, num_epochs + 1):
         model.train()
         avgLoss = 0
@@ -312,6 +328,7 @@ else:
         print(f'Epoch: {epoch:03d}, Train Acc: {train_acc}, Test Acc: {test_acc}, Loss: {loss}')
 
 def faithfulness(model, X, G, edge_mask):
+    ''' This function defines the similarity of the model output on the edge index masked out by the edge mask to the original output for node classification datasets '''
     org_vec = model(X, G)
     lst = []
     for i in range(0, edge_mask.shape[0]):
@@ -325,6 +342,7 @@ def faithfulness(model, X, G, edge_mask):
     return res
 
 def graph_faithfulness(model, X, G, edge_mask):
+    ''' This function defines the similarity of the model output on the edge index masked out by the edge mask to the original output for graph classification datasets '''
     org_vec = []
     for data in X:
         data.x = torch.reshape(data.x, (data.x.shape[0], 1))
@@ -354,6 +372,7 @@ def graph_faithfulness(model, X, G, edge_mask):
     return res
 
 ei = edge_index
+# Define parameters for datasets for all explanation types
 if sys.argv[1] in sergio:
     if sys.argv[1] == '25':
         lr = 0.001
@@ -459,6 +478,7 @@ else:
     sample_num = 8
     subgraphxidx = 53
 ep = 25
+# define GNNExplainer training datasets
 if sys.argv[1] in shapeggen:
     gnnep = 200
 else:
@@ -466,9 +486,11 @@ else:
 results = []
 graphs = []
 for run in range(0, 10):
+    # Run explainer datasets across 10 random scenes to get a sense of variability of explainers
     seed = np.random.randint(0, 1000001)
     set_seed(int(seed))
     if sys.argv[1] in shapeggen:
+        # Get BetaExplainer results
         explainer = NodeBetaExplainer.BetaExplainer(model, x, edge_index, torch.device('cpu'), alpha, beta)
         explainer.train(ep, lr)
         betaem = explainer.edge_mask()
@@ -494,6 +516,7 @@ for run in range(0, 10):
         results.append(out)
         for i in range(0, best_exp.shape[0]):
             graphs.append([seed, best_exp[i], best_ei[0, i], best_ei[1, i], best_gt[i], 'BetaExplainer'])
+        # Get GNNExplainer results
         explainer = ShapeGGenGNNExplainer(model)
         expgnn = explainer.get_explanation_graph(x, edge_index, lr = gnnlr, ep=ep)
         betaem = expgnn.edge_imp
@@ -519,6 +542,7 @@ for run in range(0, 10):
         results.append(out)
         for i in range(0, best_exp.shape[0]):
             graphs.append([seed, best_exp[i], best_ei[0, i], best_ei[1, i], best_gt[i], 'GNNExplainer'])
+        # Get SubgraphX results
         explainer = SubgraphX(model, rollout = rollout, min_atoms = min_atoms, c_puct = c_puct, expand_atoms = expand_atoms, sample_num = sample_num)
         expgnn = explainer.get_explanation_node(x, edge_index, subgraphxidx, y = y)
         betaem = expgnn.edge_imp
@@ -545,6 +569,7 @@ for run in range(0, 10):
         for i in range(0, best_exp.shape[0]):
             graphs.append([seed, best_exp[i], best_ei[0, i], best_ei[1, i], best_gt[i], 'SubgraphX'])
     elif sys.argv[1] in sergio:
+        # Get BetaExplainer results
         explainer = GraphBetaExplainer.BetaExplainer(model, graph_data, edge_index, torch.device('cpu'), 2000, alpha, beta)
         explainer.train(ep, lr)
         prediction_mask = explainer.edge_mask()
@@ -559,6 +584,7 @@ for run in range(0, 10):
         gt = gt_grn.numpy()
         for i in range(0, em.shape[0]):
             graphs.append([seed, em[i], ei[0, i], ei[1, i], gt[i], 'BetaExplainer'])
+        # Get GNNExplainer results
         expgnn = Explainer(
             model=model,
             algorithm=GNNExplainer(epochs=gnnep, lr=gnnlr),
@@ -593,6 +619,7 @@ for run in range(0, 10):
         gt = gt_grn.numpy()
         for i in range(0, em.shape[0]):
             graphs.append([seed, em[i], ei[0, i], ei[1, i], gt[i], 'GNNExplainer'])
+        # Get SubgraphX results
         explainer = SubgraphX(model, rollout = rollout, min_atoms = min_atoms, c_puct = c_puct, expand_atoms = expand_atoms, sample_num = sample_num)
         subgraphxbat = 0
         bat = 0
@@ -614,6 +641,7 @@ for run in range(0, 10):
         for i in range(0, em.shape[0]):
             graphs.append([seed, em[i], ei[0, i], ei[1, i], gt[i], 'SubgraphX'])
     else:
+        # Get BetaExplainer results
         explainer = NodeBetaExplainer.BetaExplainer(model, x, edge_index, torch.device('cpu'), alpha, beta)
         explainer.train(ep, lr)
         betaem = explainer.edge_mask()
@@ -630,6 +658,7 @@ for run in range(0, 10):
         ei = edge_index.numpy()
         for i in range(0, em.shape[0]):
             graphs.append([seed, em[i], ei[0, i], ei[1, i], 'BetaExplainer'])
+        # Get GNNExplainer results
         expgnn = Explainer(
             model=model,
             algorithm=GNNExplainer(epochs=gnnep, lr=gnnlr),
@@ -657,6 +686,7 @@ for run in range(0, 10):
         ei = edge_index.numpy()
         for i in range(0, em.shape[0]):
             graphs.append([seed, em[i], ei[0, i], ei[1, i], 'GNNExplainer'])
+        # Get SubgraphX results
         explainer = SubgraphX(model, rollout = rollout, min_atoms = min_atoms, c_puct = c_puct, expand_atoms = expand_atoms, sample_num = sample_num)
         expgnn = explainer.get_explanation_node(x, edge_index, subgraphxidx, y = y)
         betaem = expgnn.edge_imp
@@ -687,6 +717,8 @@ fn = sys.argv[1]
 df1.to_csv(f'SeedGraphResults{fn}.csv')
 results_df = df.copy()
 all_graphs = df1.copy()
+# Return average metrics for datasets taking into account the Texas dataset does not have a notion of groundtruth --> only faithfulness and number of edge indices kept
+# Return the seed for the best performing metrics for each explainer to choose this seed as to chose this explanation to graph
 if 'Accuracy' in cols:
     df = results_df[results_df['Explainer'] == 'BetaExplainer']
     a = list(df['Accuracy'])
