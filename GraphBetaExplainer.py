@@ -101,7 +101,7 @@ class BetaExplainer:
         clear_masks(self.model)
 
     def edge_mask(self):
-        # Get the edge mask!
+        ''' Return the edge mask! '''
         m = torch.distributions.beta.Beta(pyro.param("alpha_q").detach()[self.G[0, :]], pyro.param("beta_q").detach()[self.G[1, :]]).sample(torch.Size([10000]))
         return m.mean(dim=0)
 
