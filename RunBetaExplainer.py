@@ -54,15 +54,15 @@ def get_general_data(dta):
     num_classes = len(np.unique(labels))
     return adj, features, labels, num_features, num_classes
 def get_sergio_data(num):
-    '''This function allows us to load our data. We use the supergraph data - the original graph plus
-        extra points associated with differnet points that are highly correlated to see if our explainers
+    '''This function allows us to load our data. We use the subgraph data - the original graph plus
+        extra points associated with different points that are highly correlated to see if our explainers
         capture the ground truth data well'''
-    labels = np.load(f'Time Experiments/sergio data/SERGIOsimu_{num}Sparse_noLibEff_cTypes.npy')
-    features = np.load(f'Time Experiments/sergio data/SERGIOsimu_{num}Sparse_noLibEff_concatShuffled.npy')
+    labels = np.load(f'Time Experiments/sergio data/SERGIOsimu_{num}Sparse_noLibEff_cTypes.npy') # get labels
+    features = np.load(f'Time Experiments/sergio data/SERGIOsimu_{num}Sparse_noLibEff_concatShuffled.npy') # get node features
     num_features = features.shape[1]
     num_classes = len(np.unique(labels))
-    adj = np.load(f'Time Experiments/sergio data/ExtraPointsSergio{num}.npy')
-    gt = np.load('Time Experiments/sergio data/gt_adj.npy')
+    adj = np.load(f'Time Experiments/sergio data/ExtraPointsSergio{num}.npy') # get subgraph based on correlation --> contains false edges, some true edges, misses some true edges
+    gt = np.load('Time Experiments/sergio data/gt_adj.npy') # adjacency of all true edges
     lst1 = gt[0]
     lst2 = gt[1]
     gt = set()
@@ -82,7 +82,6 @@ def get_sergio_data(num):
             gt_grn.append(1) # If in ground truth graph, add 1
         else:
             gt_grn.append(0) # Else add 0
-    # The mask gt_grn indicates whether an edge in the edge index is in the groundtruth (denoted by 1) or not (denoted by 0)
     groundtruth_mask = torch.tensor(gt_grn)
     gt_grn = groundtruth_mask
     false_negative_base = 0
@@ -91,8 +90,9 @@ def get_sergio_data(num):
     for i in range(0, len(l1)):
         if (l1[i], l2[i]) not in full_set:
             false_negative_base += 1
-    print(f'Number of Data-based FNs: {false_negative_base}')
-    # false_negative_base are the edges in the groundtruth not present in the groundtruth as explainers cannot suggest these are present
+    print(f'Number of Data-based FNs: {false_negative_base}') 
+    # the false_negative_base is the number of elements in the groundtruth absent from the adjacency used for the model and explainer
+    # explainers will not be able to indicate the importance of these edges, so they are inherently false negatives
     return adj, features, labels, num_features, num_classes, gt_grn, false_negative_base
 def evaluate(y_pred, y_true):
     '''Return the accuracy, precision, recall, and F1 scores for GNN classification'''
@@ -433,7 +433,7 @@ class GCN(torch.nn.Module):
 y_true = y.numpy()
 criterion = torch.nn.CrossEntropyLoss()
 def model_objective(trial):
-    # Find the best parameters for a model on the given dataset
+    ''' Find the best parameters for a model on the given dataset '''
     lr = trial.suggest_float('lrs', 1e-6, 0.2)
     wd = trial.suggest_float('wds', 0, 1)
     hcs = trial.suggest_int('hcs', 2, 512)
@@ -512,7 +512,6 @@ elif sys.argv[1] == 'Texas':
     num_epochs = 250
 else:
     num_epochs = 50
-# Get Best Parameters for dataset
 print('Best hyperparameters:', study.best_params)
 print('Best Result:', study.best_value)
 lr = study.best_params['lrs']
@@ -524,7 +523,7 @@ criterion = torch.nn.CrossEntropyLoss()
 model = GCN(input_features, hcs, num_classes, layers, conv_type, heads).to(device)
 print(model)
 optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=wd)
-# Train model based on classification problem type
+# Train model based on classification problem type given the best parameters
 if sys.argv[2] == 'node':
     y_true = y.numpy()
     for epoch in range(1, num_epochs + 1):
