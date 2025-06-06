@@ -20,15 +20,15 @@ from ShapeGGenSimulator import GNNExplainer as ShapeGGenGNNExplainer
 # Takes 1 argument
 # Argument 1: Denotes data type; specify 25 or 50 for the 25% and 50% sparse SERGIO datasets; base, hetero, unfair, lessinform, or moreinform for ShapeGGen Simulator datasets
 def get_sergio_data(num):
-    '''This function allows us to load our data. We use the supergraph data - the original graph plus
-        extra points associated with differnet points that are highly correlated to see if our explainers
+    '''This function allows us to load our data. We use the subgraph data - the original graph plus
+        extra points associated with different points that are highly correlated to see if our explainers
         capture the ground truth data well'''
-    labels = np.load(f'Time Experiments/sergio data/SERGIOsimu_{num}Sparse_noLibEff_cTypes.npy')
-    features = np.load(f'Time Experiments/sergio data/SERGIOsimu_{num}Sparse_noLibEff_concatShuffled.npy')
+    labels = np.load(f'Time Experiments/sergio data/SERGIOsimu_{num}Sparse_noLibEff_cTypes.npy') # get labels
+    features = np.load(f'Time Experiments/sergio data/SERGIOsimu_{num}Sparse_noLibEff_concatShuffled.npy') # get node features
     num_features = features.shape[1]
     num_classes = len(np.unique(labels))
-    adj = np.load(f'Time Experiments/sergio data/ExtraPointsSergio{num}.npy')
-    gt = np.load('Time Experiments/sergio data/gt_adj.npy')
+    adj = np.load(f'Time Experiments/sergio data/ExtraPointsSergio{num}.npy') # get subgraph based on correlation --> contains false edges, some true edges, misses some true edges
+    gt = np.load('Time Experiments/sergio data/gt_adj.npy') # adjacency of all true edges
     lst1 = gt[0]
     lst2 = gt[1]
     gt = set()
@@ -56,7 +56,9 @@ def get_sergio_data(num):
     for i in range(0, len(l1)):
         if (l1[i], l2[i]) not in full_set:
             false_negative_base += 1
-    print(f'Number of Data-based FNs: {false_negative_base}')
+    print(f'Number of Data-based FNs: {false_negative_base}') 
+    # the false_negative_base is the number of elements in the groundtruth absent from the adjacency used for the model and explainer
+    # explainers will not be able to indicate the importance of these edges, so they are inherently false negatives
     return adj, features, labels, num_features, num_classes, gt_grn, false_negative_base
 def evaluate(y_pred, y_true):
     '''Return the accuracy, precision, recall, and F1 scores for GNN classification'''
@@ -225,7 +227,7 @@ class SERGIOGCN(torch.nn.Module):
         return x
 class xAIGCN(torch.nn.Module):
     def __init__(self, hidden_channels, input_feat, classes):
-        ''' Define the model for the ShapeGGen datasets '''
+        ''' Define the model for the ShapeGGen datasets and the Texas dataset as node classification problems '''
         super(xAIGCN, self).__init__()
         self.conv1 = GCNConv(input_feat, hidden_channels)
         self.conv2 = GCNConv(hidden_channels, classes)
@@ -236,7 +238,7 @@ class xAIGCN(torch.nn.Module):
         x = self.conv2(x, edge_index)
         return x
 y_true = y.numpy()
-# Get GNN training parameters for the given datasets (number of epochs, learning rate, and weight decay)
+# Get GNN training parameters for the given datasets (number of epochs, learning rate, and weight decay) and define the GNN used
 if sys.argv[1] in shapeggen:
     num_epochs = 2000
     if sys.argv[1] == 'base':
@@ -272,7 +274,7 @@ else:
     model = xAIGCN(1703, input_features, num_classes)
 print(model)
 optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=wd)
-# Train the model
+# Train the model based n the classification type
 if sys.argv[1] in shapeggen or sys.argv[1] == 'Texas':
     # Train the model if it's a node classification dataset (Texas, and ShapeGGen datasets)
     y_true = y.numpy()
